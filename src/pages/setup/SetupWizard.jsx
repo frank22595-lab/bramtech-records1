@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { doc, writeBatch, serverTimestamp } from "firebase/firestore";
 import { GraduationCap, ChevronLeft, ChevronRight, Check } from "lucide-react";
 import { Button, Card } from "../../components/ui";
@@ -68,6 +69,7 @@ const DEFAULT_STATE = {
 
 export default function SetupWizard() {
   const { school } = useSchool();
+  const navigate = useNavigate();
   const [current, setCurrent] = useState(0);
   const [state, setState] = useState(() => ({
     ...DEFAULT_STATE,
@@ -199,10 +201,10 @@ export default function SetupWizard() {
 
       await batch.commit();
       console.log("[SetupWizard] Batch commit SUCCESS ✓");
-      // SchoolContext listener will pick up setupComplete=true and route to Dashboard.
-      // We do NOT setSaving(false) on success because the component will unmount.
-      // But just in case there's a delay, set a fallback timer.
-      setTimeout(() => setSaving(false), 3000);
+
+      // Fix #6 — explicitly navigate to dashboard after successful save
+      // Preserve the ?school=xxx query parameter so we stay in the same tenant
+      navigate(`/dashboard${window.location.search}`, { replace: true });
     } catch (err) {
       console.error("[SetupWizard] finish error:", err);
       setError(err.code ? `${err.code}: ${err.message}` : err.message);

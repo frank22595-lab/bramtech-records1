@@ -19,13 +19,20 @@ import {
   Badge,
 } from "../../components/ui";
 import ImageUpload from "../../components/ImageUpload";
+import StudentAccessCard from "../../components/students/StudentAccessCard";
 import { getFirebase } from "../../config/firebase";
 import { useAuth } from "../../contexts/AuthContext";
+import { useSchool } from "../../contexts/SchoolContext";
 import {
   isCloudinaryConfigured,
   cloudinaryUrl,
   cloudinaryPresets,
 } from "../../lib/cloudinary";
+import {
+  previewNextAdmissionNumber,
+  generateAdmissionNumber,
+} from "../../lib/admissionNumber";
+import { generateAccessCode, hashAccessCode } from "../../lib/accessCode";
 
 export default function StudentsTab() {
   const { db } = getFirebase();
@@ -190,7 +197,6 @@ function Avatar({ photoUrl, name, size = 40 }) {
     .slice(0, 2)
     .join("")
     .toUpperCase();
-  // Show face-detected auto-cropped thumbnail if we have a photo URL
   const src = photoUrl
     ? cloudinaryUrl(photoUrl, cloudinaryPresets.studentPhotoThumb) || photoUrl
     : null;
@@ -216,8 +222,10 @@ function Avatar({ photoUrl, name, size = 40 }) {
 function StudentModal({ student, classes, onClose }) {
   const { db } = getFirebase();
   const { profile } = useAuth();
+  const { school } = useSchool();
   const isEdit = !!student;
   const cloudinaryReady = isCloudinaryConfigured();
+  const [suggestedAdmission, setSuggestedAdmission] = useState("");
   const [form, setForm] = useState(
     () =>
       student || {
@@ -238,6 +246,22 @@ function StudentModal({ student, classes, onClose }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
+  // Preview the next admission number so the admin can see what will be assigned.
+  // Only for new students — edit mode keeps the existing number.
+  useEffect(() => {
+    if (!isEdit) {
+      const acronym = school?.shortName || "STU";
+      previewNextAdmissionNumber(acronym)
+        .then(setSuggestedAdmission)
+        .catch((err) =>
+          console.warn(
+            "[StudentModal] Could not preview admission number:",
+            err,
+          ),
+        );
+    }
+  }, [isEdit, school]);
+
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
   const save = async () => {
@@ -256,9 +280,36 @@ function StudentModal({ student, classes, onClose }) {
         student?.id ||
         `stu_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
       const selectedClass = classes.find((c) => c.id === form.classId);
+
+      // For NEW students: auto-generate admission number if admin didn't type one,
+      // and always generate an access code for the parent portal.
+      let admissionNumber = (form.admissionNumber || "").trim();
+      let extraFields = {};
+
+      if (!isEdit) {
+        if (!admissionNumber) {
+          admissionNumber = await generateAdmissionNumber(
+            school?.shortName || "STU",
+          );
+          console.log(
+            "[StudentModal] Auto-generated admission number:",
+            admissionNumber,
+          );
+        }
+
+        const accessCode = generateAccessCode();
+        const accessCodeHash = await hashAccessCode(accessCode);
+        extraFields = {
+          accessCode,
+          accessCodeHash,
+          accessCodeGeneratedAt: serverTimestamp(),
+        };
+        console.log("[StudentModal] Generated access code for new student");
+      }
+
       const payload = {
         fullName: (form.fullName || "").trim(),
-        admissionNumber: (form.admissionNumber || "").trim() || null,
+        admissionNumber: admissionNumber || null,
         classId: form.classId,
         className: selectedClass?.name || "",
         gender: form.gender,
@@ -273,13 +324,17 @@ function StudentModal({ student, classes, onClose }) {
         updatedAt: serverTimestamp(),
         updatedBy: profile?.id || null,
       };
-      if (isEdit) await updateDoc(doc(db, "students", studentId), payload);
-      else
+
+      if (isEdit) {
+        await updateDoc(doc(db, "students", studentId), payload);
+      } else {
         await setDoc(doc(db, "students", studentId), {
           ...payload,
+          ...extraFields,
           createdAt: serverTimestamp(),
           createdBy: profile?.id || null,
         });
+      }
       onClose();
     } catch (err) {
       setError(err.message);
@@ -308,6 +363,11 @@ function StudentModal({ student, classes, onClose }) {
           </button>
         </div>
         <div className="p-6 space-y-4">
+          {/* Parent portal access card — only in edit mode, only if student exists */}
+          {isEdit && student && (
+            <StudentAccessCard student={student} school={school} />
+          )}
+
           <ImageUpload
             label="Student photo"
             value={form.photoUrl}
@@ -328,12 +388,24 @@ function StudentModal({ student, classes, onClose }) {
             onChange={(e) => set("fullName", e.target.value)}
           />
           <div className="grid md:grid-cols-2 gap-4">
-            <Input
-              label="Admission number"
-              placeholder="e.g. DSC/2026/0234"
-              value={form.admissionNumber}
-              onChange={(e) => set("admissionNumber", e.target.value)}
-            />
+            <div>
+              <Input
+                label="Admission number"
+                placeholder={
+                  suggestedAdmission || (isEdit ? "" : "auto-generated on save")
+                }
+                value={form.admissionNumber}
+                onChange={(e) => set("admissionNumber", e.target.value)}
+              />
+              {!isEdit && suggestedAdmission && !form.admissionNumber && (
+                <p className="text-xs text-ink-soft mt-1">
+                  Will be assigned:{" "}
+                  <span className="font-mono font-medium">
+                    {suggestedAdmission}
+                  </span>
+                </p>
+              )}
+            </div>
             <Select
               label="Class"
               value={form.classId}
