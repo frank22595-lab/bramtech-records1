@@ -1,0 +1,101 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---------- helpers ----------
+    function isSignedIn() { return request.auth != null; }
+    function myRole()      { return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role; }
+    function myClassIds()  { return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.assignedClasses; }
+    function myClassTeacherOf() { return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.classTeacherOf; }
+    function isDirector()  { return isSignedIn() && myRole() == 'director'; }
+    function isAdmin()     { return isSignedIn() && (myRole() == 'director' || myRole() == 'admin'); }
+    function isTeacher()   { return isSignedIn() && myRole() == 'teacher'; }
+    function isParent()    { return isSignedIn() && myRole() == 'parent'; }
+    function ownsRecord(uid) { return isSignedIn() && request.auth.uid == uid; }
+    function myLinkedStudents() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.linkedStudents;
+    }
+
+    // ---------- school (single doc: /school/root) ----------
+    match /school/{docId} {
+      allow read: if isSignedIn();
+      allow write: if isDirector();
+    }
+
+    // ---------- classes ----------
+    match /classes/{classId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // ---------- subjects ----------
+    match /subjects/{subjectId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // ---------- assessments ----------
+    match /assessments/{assessmentId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // ---------- terms ----------
+    match /terms/{termId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // ---------- users / profiles ----------
+    match /users/{uid} {
+      allow read: if isSignedIn() && (ownsRecord(uid) || isAdmin());
+      allow create: if isSignedIn() && ownsRecord(uid);
+      allow update: if isAdmin() || ownsRecord(uid);
+      allow delete: if isDirector();
+    }
+
+    // ---------- students ----------
+    match /students/{studentId} {
+      allow read: if isSignedIn();
+      allow create, update: if isAdmin();
+      allow delete: if isDirector();  // fix: was missing
+    }
+
+    // ---------- results (score entries) ----------
+    match /results/{resultId} {
+      allow read: if isSignedIn();
+      allow create, update: if isAdmin() ||
+        (isTeacher() && request.resource.data.classId in myClassIds());
+      allow delete: if isDirector();  // fix: was missing
+    }
+
+    // ---------- reportCards (published snapshots) ----------
+    match /reportCards/{cardId} {
+      allow read: if isAdmin()
+        || (isTeacher() && resource.data.classId in myClassIds())
+        || (isParent() && resource.data.studentId in myLinkedStudents());
+
+      // Create: admins can always. Class teachers can too, but only for their class.
+      allow create: if isAdmin() ||
+        (isTeacher() && request.resource.data.classId == myClassTeacherOf());
+
+      // Update: same access + the field-level restriction.
+      // Teachers CANNOT set headTeacherComment or headTeacherName.
+      allow update: if (isAdmin() ||
+        (isTeacher() && resource.data.classId == myClassTeacherOf()))
+        && (isAdmin() || !(
+          'headTeacherComment' in request.resource.data.diff(resource.data).affectedKeys()
+          || 'headTeacherName' in request.resource.data.diff(resource.data).affectedKeys()
+          || 'headTeacherTitle' in request.resource.data.diff(resource.data).affectedKeys()
+          || 'headTeacherSignedAt' in request.resource.data.diff(resource.data).affectedKeys()
+        ));
+
+      allow delete: if isDirector();
+    }
+
+    // ---------- default deny ----------
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
