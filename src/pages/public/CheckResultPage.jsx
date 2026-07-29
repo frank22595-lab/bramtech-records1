@@ -2,16 +2,6 @@ import { useState } from "react";
 import { generateReportCardPDF } from "../../lib/pdfGenerator";
 import { formatAccessCode } from "../../lib/accessCode";
 
-/**
- * Public parent result-checker portal.
- * Route: /check-result (no login required)
- *
- * Flow:
- *   1. Parent enters admission number + access code
- *   2. Frontend POSTs to /api/check-result
- *   3. On success, shows student card + list of published reports
- *   4. Parent clicks a report → PDF downloads
- */
 export default function CheckResultPage() {
   const [admission, setAdmission] = useState("");
   const [code, setCode] = useState("");
@@ -47,19 +37,11 @@ export default function CheckResultPage() {
   const downloadPdf = async (report) => {
     setDownloadingId(report.id);
     try {
-      // Debug: log the exact shape of the report we received
-      console.log("[CheckResultPage] Report card doc:", report);
-      console.log(
-        "[CheckResultPage] Subjects count:",
-        Array.isArray(report.subjects)
-          ? report.subjects.length
-          : "not an array",
-      );
+      // Age: null out zero (bogus placeholder from empty DOB) so template
+      // shows blank instead of "0 yrs"
+      let age = report.age;
+      if (age === 0 || age === "0") age = null;
 
-      // Build the pdfGenerator input mapping Firestore field names correctly.
-      // The reportCards doc has these fields flat at top level:
-      //   academicYear, termName, termNumber, classTeacherComment, classTeacherName,
-      //   headTeacherComment, headTeacherName, headTeacherTitle, subjects, psychomotor, affective, attendance
       const input = {
         school: result.school,
         student: report.studentSnapshot || result.student,
@@ -71,24 +53,27 @@ export default function CheckResultPage() {
           closingDate: report.closingDate,
           resumesOn: report.resumesOn,
         },
-        age: report.age,
+        age,
         report,
         attendance: report.attendance || {},
         psychomotor: report.psychomotor || [],
         affective: report.affective || [],
         adviser: report.adviser || {},
         classTeacher: {
-          name: report.classTeacherName || "",
+          name: report.classTeacherName || "Class Teacher",
           comment: report.classTeacherComment || "",
         },
         headTeacher: {
-          name: report.headTeacherName || "",
+          name:
+            report.headTeacherName ||
+            result.school?.headTeacherName ||
+            result.school?.principalName ||
+            "Principal",
           title: report.headTeacherTitle || "Principal",
           comment: report.headTeacherComment || "",
         },
         config: report.config || {},
       };
-      console.log("[CheckResultPage] PDF input:", input);
 
       const doc = await generateReportCardPDF(input);
       const fileName =

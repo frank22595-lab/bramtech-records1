@@ -1,12 +1,8 @@
 /**
  * POST /api/check-result
  *
- * Validates admission number + access code, returns published report cards.
- *
- * Env vars required in Vercel:
- *   FIREBASE_PROJECT_ID
- *   FIREBASE_CLIENT_EMAIL
- *   FIREBASE_PRIVATE_KEY  (with newlines as \n)
+ * v3 — returns full school object (gradingScale, signature, stamp) so the
+ * PDF template can render everything the admin view shows.
  */
 
 import { initializeApp, cert, getApps } from "firebase-admin/app";
@@ -28,7 +24,6 @@ if (!getApps().length) {
 
 const db = getFirestore();
 
-// In-memory rate limiter (resets on cold start)
 const attempts = new Map();
 
 function checkRateLimit(ip) {
@@ -115,27 +110,31 @@ export default async function handler(req, res) {
       });
 
     const schoolSnap = await db.doc("school/root").get();
-    const school = schoolSnap.exists ? schoolSnap.data() : {};
+    const schoolData = schoolSnap.exists ? schoolSnap.data() : {};
 
+    // Return the FULL school object so PDF template has everything
+    // (gradingScale, signature, stamp, contact object, etc.)
     return res.status(200).json({
       student: {
         id: studentDoc.id,
         fullName: student.fullName,
         admissionNumber: student.admissionNumber,
         photoUrl: student.photoUrl || null,
-        currentClass: student.class || student.currentClass || "",
+        currentClass:
+          student.class || student.currentClass || student.className || "",
         status: student.status || "active",
         gender: student.gender || "",
         dateOfBirth: student.dateOfBirth || null,
+        weight: student.weight || null,
+        height: student.height || null,
       },
       school: {
-        name: school.name || "",
-        shortName: school.shortName || "",
-        address: school.address || "",
-        phone: school.phone || "",
-        email: school.email || "",
-        motto: school.motto || "",
-        logoUrl: school.logoUrl || null,
+        // Include everything — the template picks what it needs
+        ...schoolData,
+        // Ensure these string field aliases exist (template checks both)
+        phone: schoolData.phone || schoolData.contact?.phone || "",
+        email: schoolData.email || schoolData.contact?.email || "",
+        website: schoolData.website || schoolData.contact?.website || "",
       },
       reports,
     });
