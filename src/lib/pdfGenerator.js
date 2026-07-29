@@ -1,7 +1,8 @@
 /**
  * Report card PDF generator (async).
  *
- * v3 — simpler sanitize, extra logging, more permissive with field names.
+ * v4 — subjects live inside report.publishSnapshot.subjects
+ * (not top-level report.subjects). This version looks in both places.
  */
 
 import { renderDucams } from "./ducamsTemplate";
@@ -21,56 +22,59 @@ async function safeFetch(url) {
 }
 
 /**
+ * Extract an array field from either the top level or inside publishSnapshot.
+ * Reports save subject data inside `publishSnapshot` at publish time; this
+ * makes them findable no matter which level they live at.
+ */
+function pickArray(...candidates) {
+  for (const c of candidates) {
+    if (Array.isArray(c) && c.length > 0) return c;
+  }
+  return [];
+}
+
+/**
  * Guarantee every array/object/primitive the templates read exists.
- * Also accept subjects at either input.report.subjects OR input.subjects.
  */
 function sanitize(input) {
   const school = input.school || {};
   const student = input.student || {};
   const term = input.term || {};
   const rawReport = input.report || {};
+  const snapshot = rawReport.publishSnapshot || {};
   const config = input.config || {};
 
-  // Subjects can live at report.subjects OR at top-level input.subjects
-  const subjects =
-    (Array.isArray(rawReport.subjects) && rawReport.subjects.length > 0
-      ? rawReport.subjects
-      : null) ||
-    (Array.isArray(input.subjects) && input.subjects.length > 0
-      ? input.subjects
-      : null) ||
-    [];
+  // Subjects can live at either report.subjects OR report.publishSnapshot.subjects
+  const subjects = pickArray(
+    rawReport.subjects,
+    snapshot.subjects,
+    input.subjects,
+  );
 
-  const psychomotor =
-    (Array.isArray(input.psychomotor) && input.psychomotor.length > 0
-      ? input.psychomotor
-      : null) ||
-    (Array.isArray(rawReport.psychomotor) && rawReport.psychomotor.length > 0
-      ? rawReport.psychomotor
-      : null) ||
-    [];
+  const psychomotor = pickArray(
+    input.psychomotor,
+    rawReport.psychomotor,
+    snapshot.psychomotor,
+  );
 
-  const affective =
-    (Array.isArray(input.affective) && input.affective.length > 0
-      ? input.affective
-      : null) ||
-    (Array.isArray(rawReport.affective) && rawReport.affective.length > 0
-      ? rawReport.affective
-      : null) ||
-    [];
+  const affective = pickArray(
+    input.affective,
+    rawReport.affective,
+    snapshot.affective,
+  );
 
-  console.log("[pdfGenerator] Sanitize called with:", {
-    reportKeys: Object.keys(rawReport),
-    hasSubjects: !!rawReport.subjects,
-    subjectsIsArray: Array.isArray(rawReport.subjects),
-    subjectsLength: Array.isArray(rawReport.subjects)
-      ? rawReport.subjects.length
-      : "n/a",
-    finalSubjectsCount: subjects.length,
+  console.log("[pdfGenerator] Sanitize resolved:", {
+    subjectsFound: subjects.length,
+    subjectsSource: rawReport.subjects?.length
+      ? "report.subjects"
+      : snapshot.subjects?.length
+        ? "publishSnapshot.subjects"
+        : "none",
     firstSubject: subjects[0]
       ? {
           subjectName: subjects[0].subjectName,
           total: subjects[0].total,
+          grade: subjects[0].grade,
           hasAssessments: !!subjects[0].assessments,
         }
       : null,
@@ -119,6 +123,18 @@ function sanitize(input) {
       subjects,
       psychomotor,
       affective,
+      // Also pull common overall fields from snapshot if missing at top level
+      totalObtained: rawReport.totalObtained ?? snapshot.totalObtained ?? 0,
+      totalPossible: rawReport.totalPossible ?? snapshot.totalPossible ?? 0,
+      percentageAverage:
+        rawReport.percentageAverage ?? snapshot.percentageAverage ?? 0,
+      overallGrade: rawReport.overallGrade ?? snapshot.overallGrade ?? "",
+      overallPosition: rawReport.overallPosition ?? snapshot.overallPosition,
+      overallRemark: rawReport.overallRemark ?? snapshot.overallRemark ?? "",
+      classSize: rawReport.classSize ?? snapshot.classSize ?? 0,
+      classAverage: rawReport.classAverage ?? snapshot.classAverage ?? 0,
+      classHighestPct: rawReport.classHighestPct ?? snapshot.classHighestPct,
+      classLowestPct: rawReport.classLowestPct ?? snapshot.classLowestPct,
     },
     attendance: input.attendance || rawReport.attendance || {},
     psychomotor,
@@ -144,8 +160,6 @@ function sanitize(input) {
 }
 
 export async function generateReportCardPDF(rawInput) {
-  console.log("[pdfGenerator] Raw input received:", rawInput);
-
   const input = sanitize(rawInput);
   const { school, student } = input;
 
@@ -163,14 +177,11 @@ export async function generateReportCardPDF(rawInput) {
   if (stamp) images.stamp = stamp;
 
   const enrichedInput = { ...input, images };
-  console.log("[pdfGenerator] Enriched input for template:", {
-    subjectsCount: enrichedInput.report.subjects.length,
-    reportKeys: Object.keys(enrichedInput.report),
-    hasImages: {
-      logo: !!images.logo,
-      studentPhoto: !!images.studentPhoto,
-    },
-  });
+  console.log(
+    "[pdfGenerator] Rendering with",
+    enrichedInput.report.subjects.length,
+    "subjects",
+  );
 
   try {
     const { design } = normalizeConfig(input.config || {});
