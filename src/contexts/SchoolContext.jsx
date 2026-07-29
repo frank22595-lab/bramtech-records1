@@ -21,7 +21,7 @@ const SchoolContext = createContext(null);
  * the user signs in.
  */
 export function SchoolProvider({ children }) {
-  const [status, setStatus] = useState("loading"); // loading | main | notFound | ready
+  const [status, setStatus] = useState("loading");
   const [slug, setSlug] = useState(null);
   const [school, setSchool] = useState(null);
   const [error, setError] = useState(null);
@@ -49,10 +49,25 @@ export function SchoolProvider({ children }) {
         initFirebaseForSchool(detectedSlug, config);
         setSlug(detectedSlug);
 
-        const { db } = getFirebase();
+        const firebaseHandles = getFirebase();
+        const db = firebaseHandles.db;
 
-        // Subscribe (or resubscribe) to the school root doc.
-        // Cleans up any prior listener first.
+        // Get the auth instance from the school-specific Firebase app.
+        // Try multiple ways since we don't know the exact shape of getFirebase().
+        let auth = null;
+        try {
+          if (firebaseHandles.auth) {
+            auth = firebaseHandles.auth;
+          } else if (firebaseHandles.app) {
+            auth = getAuth(firebaseHandles.app);
+          }
+        } catch (authErr) {
+          console.warn(
+            "[SchoolContext] Could not get auth instance:",
+            authErr.message,
+          );
+        }
+
         function subscribeToSchoolDoc() {
           if (schoolUnsub) {
             try {
@@ -70,25 +85,23 @@ export function SchoolProvider({ children }) {
             (err) => {
               console.error("[SchoolContext] school doc listener error:", err);
               setError(err.message);
-              setStatus("ready"); // still ready, just no school doc yet
+              setStatus("ready");
             },
           );
         }
 
-        // Initial subscribe — will fail with permission-denied if anonymous
+        // Initial subscribe
         subscribeToSchoolDoc();
 
-        // Resubscribe whenever auth state changes so that after login we
-        // read the doc with the user's credentials.
-        try {
-          const auth = getAuth();
+        // Resubscribe on auth state changes so permission-denied errors
+        // recover automatically once the user signs in.
+        if (auth) {
           authUnsub = onAuthStateChanged(auth, () => {
             subscribeToSchoolDoc();
           });
-        } catch (authErr) {
+        } else {
           console.warn(
-            "[SchoolContext] Could not attach auth listener:",
-            authErr.message,
+            "[SchoolContext] No auth instance available — auto-resubscribe on login disabled",
           );
         }
       } catch (err) {
