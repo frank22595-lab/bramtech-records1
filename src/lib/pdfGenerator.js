@@ -1,12 +1,7 @@
 /**
  * Report card PDF generator (async).
  *
- * Routes to Classic, Polish, or Experimental design based on
- * config.template. All three share the same palette system and
- * grade-tier colors.
- *
- * Fix #2 — sanitizes inputs before passing to templates so missing
- * fields don't crash with "Cannot read properties of undefined".
+ * v3 — simpler sanitize, extra logging, more permissive with field names.
  */
 
 import { renderDucams } from "./ducamsTemplate";
@@ -26,18 +21,62 @@ async function safeFetch(url) {
 }
 
 /**
- * Guarantee every array/object/primitive the templates read exists,
- * so they never hit `undefined.length` or similar.
+ * Guarantee every array/object/primitive the templates read exists.
+ * Also accept subjects at either input.report.subjects OR input.subjects.
  */
 function sanitize(input) {
   const school = input.school || {};
   const student = input.student || {};
   const term = input.term || {};
-  const report = input.report || {};
+  const rawReport = input.report || {};
   const config = input.config || {};
 
+  // Subjects can live at report.subjects OR at top-level input.subjects
+  const subjects =
+    (Array.isArray(rawReport.subjects) && rawReport.subjects.length > 0
+      ? rawReport.subjects
+      : null) ||
+    (Array.isArray(input.subjects) && input.subjects.length > 0
+      ? input.subjects
+      : null) ||
+    [];
+
+  const psychomotor =
+    (Array.isArray(input.psychomotor) && input.psychomotor.length > 0
+      ? input.psychomotor
+      : null) ||
+    (Array.isArray(rawReport.psychomotor) && rawReport.psychomotor.length > 0
+      ? rawReport.psychomotor
+      : null) ||
+    [];
+
+  const affective =
+    (Array.isArray(input.affective) && input.affective.length > 0
+      ? input.affective
+      : null) ||
+    (Array.isArray(rawReport.affective) && rawReport.affective.length > 0
+      ? rawReport.affective
+      : null) ||
+    [];
+
+  console.log("[pdfGenerator] Sanitize called with:", {
+    reportKeys: Object.keys(rawReport),
+    hasSubjects: !!rawReport.subjects,
+    subjectsIsArray: Array.isArray(rawReport.subjects),
+    subjectsLength: Array.isArray(rawReport.subjects)
+      ? rawReport.subjects.length
+      : "n/a",
+    finalSubjectsCount: subjects.length,
+    firstSubject: subjects[0]
+      ? {
+          subjectName: subjects[0].subjectName,
+          total: subjects[0].total,
+          hasAssessments: !!subjects[0].assessments,
+        }
+      : null,
+  });
+
   return {
-    ...input,
     school: {
       name: "",
       shortName: "",
@@ -64,7 +103,8 @@ function sanitize(input) {
       dateOfBirth: null,
       ...student,
     },
-    className: input.className || student.currentClass || "",
+    className:
+      input.className || student.currentClass || rawReport.className || "",
     term: {
       academicYear: "",
       termNumber: 1,
@@ -73,33 +113,16 @@ function sanitize(input) {
       resumesOn: null,
       ...term,
     },
-    age: input.age || "",
+    age: input.age,
     report: {
-      overallGrade: "",
-      percentageAverage: 0,
-      totalScore: 0,
-      maxScore: 0,
-      position: "",
-      classAverage: 0,
-      subjects: [],
-      psychomotor: [],
-      affective: [],
-      teacherComment: "",
-      headTeacherComment: "",
-      ...report,
-      // Force these to arrays even if the incoming value is falsy/wrong type
-      subjects: Array.isArray(report.subjects) ? report.subjects : [],
-      psychomotor: Array.isArray(report.psychomotor) ? report.psychomotor : [],
-      affective: Array.isArray(report.affective) ? report.affective : [],
+      ...rawReport,
+      subjects,
+      psychomotor,
+      affective,
     },
-    attendance: {
-      present: 0,
-      absent: 0,
-      total: 0,
-      ...(input.attendance || {}),
-    },
-    psychomotor: Array.isArray(input.psychomotor) ? input.psychomotor : [],
-    affective: Array.isArray(input.affective) ? input.affective : [],
+    attendance: input.attendance || rawReport.attendance || {},
+    psychomotor,
+    affective,
     adviser: input.adviser || {},
     classTeacher: input.classTeacher || {},
     headTeacher: input.headTeacher || {},
@@ -121,6 +144,8 @@ function sanitize(input) {
 }
 
 export async function generateReportCardPDF(rawInput) {
+  console.log("[pdfGenerator] Raw input received:", rawInput);
+
   const input = sanitize(rawInput);
   const { school, student } = input;
 
@@ -138,6 +163,14 @@ export async function generateReportCardPDF(rawInput) {
   if (stamp) images.stamp = stamp;
 
   const enrichedInput = { ...input, images };
+  console.log("[pdfGenerator] Enriched input for template:", {
+    subjectsCount: enrichedInput.report.subjects.length,
+    reportKeys: Object.keys(enrichedInput.report),
+    hasImages: {
+      logo: !!images.logo,
+      studentPhoto: !!images.studentPhoto,
+    },
+  });
 
   try {
     const { design } = normalizeConfig(input.config || {});

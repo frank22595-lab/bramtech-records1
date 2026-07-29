@@ -1,6 +1,6 @@
-import { useState } from 'react'
-import { generateReportCardPDF } from '../../lib/pdfGenerator'
-import { formatAccessCode } from '../../lib/accessCode'
+import { useState } from "react";
+import { generateReportCardPDF } from "../../lib/pdfGenerator";
+import { formatAccessCode } from "../../lib/accessCode";
 
 /**
  * Public parent result-checker portal.
@@ -13,49 +13,61 @@ import { formatAccessCode } from '../../lib/accessCode'
  *   4. Parent clicks a report → PDF downloads
  */
 export default function CheckResultPage() {
-  const [admission, setAdmission] = useState('')
-  const [code, setCode] = useState('')
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
-  const [result, setResult] = useState(null)
-  const [downloadingId, setDownloadingId] = useState(null)
+  const [admission, setAdmission] = useState("");
+  const [code, setCode] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [result, setResult] = useState(null);
+  const [downloadingId, setDownloadingId] = useState(null);
 
   const submit = async (e) => {
-    e.preventDefault()
-    setLoading(true)
-    setError('')
-    setResult(null)
+    e.preventDefault();
+    setLoading(true);
+    setError("");
+    setResult(null);
     try {
-      const res = await fetch('/api/check-result', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+      const res = await fetch("/api/check-result", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           admissionNumber: admission.trim(),
           accessCode: code.trim(),
         }),
-      })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error || 'Something went wrong.')
-      setResult(data)
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Something went wrong.");
+      setResult(data);
     } catch (err) {
-      setError(err.message || 'Could not check result. Try again.')
+      setError(err.message || "Could not check result. Try again.");
     } finally {
-      setLoading(false)
+      setLoading(false);
     }
-  }
+  };
 
   const downloadPdf = async (report) => {
-    setDownloadingId(report.id)
+    setDownloadingId(report.id);
     try {
-      // Reconstruct the pdfGenerator input from the stored report snapshot
+      // Debug: log the exact shape of the report we received
+      console.log("[CheckResultPage] Report card doc:", report);
+      console.log(
+        "[CheckResultPage] Subjects count:",
+        Array.isArray(report.subjects)
+          ? report.subjects.length
+          : "not an array",
+      );
+
+      // Build the pdfGenerator input mapping Firestore field names correctly.
+      // The reportCards doc has these fields flat at top level:
+      //   academicYear, termName, termNumber, classTeacherComment, classTeacherName,
+      //   headTeacherComment, headTeacherName, headTeacherTitle, subjects, psychomotor, affective, attendance
       const input = {
         school: result.school,
         student: report.studentSnapshot || result.student,
-        className: report.className || '',
+        className: report.className || "",
         term: report.termSnapshot || {
-          academicYear: report.session,
-          termNumber: report.termNumber,
-          name: report.term,
+          academicYear: report.academicYear || report.session || "",
+          termNumber: report.termNumber || 1,
+          name: report.termName || report.term || "",
           closingDate: report.closingDate,
           resumesOn: report.resumesOn,
         },
@@ -65,27 +77,39 @@ export default function CheckResultPage() {
         psychomotor: report.psychomotor || [],
         affective: report.affective || [],
         adviser: report.adviser || {},
-        classTeacher: report.classTeacher || {},
-        headTeacher: report.headTeacher || {},
+        classTeacher: {
+          name: report.classTeacherName || "",
+          comment: report.classTeacherComment || "",
+        },
+        headTeacher: {
+          name: report.headTeacherName || "",
+          title: report.headTeacherTitle || "Principal",
+          comment: report.headTeacherComment || "",
+        },
         config: report.config || {},
-      }
-      const doc = await generateReportCardPDF(input)
-      const fileName = `${result.student.fullName} - ${report.term || 'Term'} - ${report.session || ''}.pdf`
-        .replace(/[\/\\:*?"<>|]/g, '-')
-      doc.save(fileName)
+      };
+      console.log("[CheckResultPage] PDF input:", input);
+
+      const doc = await generateReportCardPDF(input);
+      const fileName =
+        `${result.student.fullName} - ${report.termName || report.term || "Term"} - ${report.academicYear || report.session || ""}.pdf`.replace(
+          /[\/\\:*?"<>|]/g,
+          "-",
+        );
+      doc.save(fileName);
     } catch (err) {
-      alert('Could not generate PDF: ' + (err.message || 'unknown error'))
+      alert("Could not generate PDF: " + (err.message || "unknown error"));
     } finally {
-      setDownloadingId(null)
+      setDownloadingId(null);
     }
-  }
+  };
 
   const reset = () => {
-    setResult(null)
-    setAdmission('')
-    setCode('')
-    setError('')
-  }
+    setResult(null);
+    setAdmission("");
+    setCode("");
+    setError("");
+  };
 
   if (result) {
     return (
@@ -95,7 +119,7 @@ export default function CheckResultPage() {
         onDownload={downloadPdf}
         downloadingId={downloadingId}
       />
-    )
+    );
   }
 
   return (
@@ -103,13 +127,18 @@ export default function CheckResultPage() {
       <div className="flex-1 flex items-center justify-center px-4 py-8">
         <div className="max-w-md w-full">
           <div className="text-center mb-6">
-            <h1 className="text-2xl font-semibold text-slate-900">Check Student Result</h1>
+            <h1 className="text-2xl font-semibold text-slate-900">
+              Check Student Result
+            </h1>
             <p className="text-sm text-slate-600 mt-2">
               Enter your child's admission number and access code.
             </p>
           </div>
 
-          <form onSubmit={submit} className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 space-y-4">
+          <form
+            onSubmit={submit}
+            className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 space-y-4"
+          >
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1.5">
                 Admission Number
@@ -156,7 +185,7 @@ export default function CheckResultPage() {
               disabled={loading || !admission || !code}
               className="w-full bg-slate-900 hover:bg-slate-800 text-white font-medium py-2.5 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {loading ? 'Checking…' : 'Check Result'}
+              {loading ? "Checking…" : "Check Result"}
             </button>
           </form>
 
@@ -166,7 +195,7 @@ export default function CheckResultPage() {
         </div>
       </div>
     </div>
-  )
+  );
 }
 
 function ResultView({ result, onReset, onDownload, downloadingId }) {
@@ -190,7 +219,7 @@ function ResultView({ result, onReset, onDownload, downloadingId }) {
               />
             ) : (
               <div className="w-16 h-16 rounded-full bg-slate-200 flex items-center justify-center text-slate-500 font-semibold text-xl">
-                {result.student.fullName?.charAt(0) || '?'}
+                {result.student.fullName?.charAt(0) || "?"}
               </div>
             )}
             <div className="min-w-0 flex-1">
@@ -209,14 +238,16 @@ function ResultView({ result, onReset, onDownload, downloadingId }) {
           <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-8 text-center">
             <div className="text-slate-400 mb-2">📄</div>
             <p className="text-sm text-slate-600">No published results yet.</p>
-            <p className="text-xs text-slate-500 mt-1">Check back after the school publishes term results.</p>
+            <p className="text-xs text-slate-500 mt-1">
+              Check back after the school publishes term results.
+            </p>
           </div>
         ) : (
           <div className="space-y-2">
             <div className="text-xs font-semibold text-slate-500 uppercase tracking-wide px-1 mb-2">
               Available Reports ({result.reports.length})
             </div>
-            {result.reports.map(r => (
+            {result.reports.map((r) => (
               <ReportRow
                 key={r.id}
                 report={r}
@@ -228,27 +259,29 @@ function ResultView({ result, onReset, onDownload, downloadingId }) {
         )}
       </div>
     </div>
-  )
+  );
 }
 
 function ReportRow({ report, downloading, onDownload }) {
+  const session = report.academicYear || report.session || "";
+  const termLabel = report.termName || report.term || "";
   return (
     <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 flex items-center gap-3">
       <div className="min-w-0 flex-1">
         <div className="font-medium text-slate-900 truncate">
-          {report.session} — {report.term}
+          {session} — {termLabel}
         </div>
         <div className="text-sm text-slate-600 mt-0.5">
           {report.className}
           {report.overallGrade && (
             <>
-              {' · '}
+              {" · "}
               <span className="font-medium">Grade: {report.overallGrade}</span>
             </>
           )}
           {report.percentageAverage != null && (
             <>
-              {' · '}
+              {" · "}
               <span>{report.percentageAverage}%</span>
             </>
           )}
@@ -259,8 +292,8 @@ function ReportRow({ report, downloading, onDownload }) {
         disabled={downloading}
         className="bg-slate-900 hover:bg-slate-800 text-white text-sm font-medium px-4 py-2 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
       >
-        {downloading ? 'Loading…' : 'Download PDF'}
+        {downloading ? "Loading…" : "Download PDF"}
       </button>
     </div>
-  )
+  );
 }
