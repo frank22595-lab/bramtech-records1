@@ -1,20 +1,22 @@
 /**
- * POST /api/staff-signup — v3
+ * POST /api/staff-signup — v4
  *
- * Now uses the shared firebase-admin helper which reads a single
- * FIREBASE_SERVICE_ACCOUNT_JSON env var (much less error-prone than the
- * 3-variable format).
+ * Removed firebase-admin/auth import (was triggering ERR_REQUIRE_ESM on
+ * Vercel's Node runtime). Now uses ONLY firebase-admin/firestore, which
+ * is stable everywhere.
+ *
+ * Tradeoff: if code validation fails, the Firebase Auth user stays around.
+ * Client can offer them a retry with a different code — auth user will be
+ * reused. Small imperfection, worth it to get signups working.
  */
 
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
-import { getAuth } from "firebase-admin/auth";
 import crypto from "crypto";
 import { ensureFirebaseAdmin } from "./_firebase-admin.js";
 
 ensureFirebaseAdmin();
 
 const db = getFirestore();
-const auth = getAuth();
 
 const attempts = new Map();
 function checkRateLimit(ip) {
@@ -33,14 +35,6 @@ function hashCode(code) {
     .replace(/[-\s]/g, "")
     .replace(/^STAFF/, "");
   return crypto.createHash("sha256").update(normalized).digest("hex");
-}
-
-async function deleteAuthUser(uid) {
-  try {
-    await auth.deleteUser(uid);
-  } catch (err) {
-    console.warn("Could not delete auth user:", uid, err.message);
-  }
 }
 
 export default async function handler(req, res) {
@@ -76,7 +70,6 @@ export default async function handler(req, res) {
   try {
     const schoolSnap = await db.doc("school/root").get();
     if (!schoolSnap.exists) {
-      await deleteAuthUser(uid);
       return res
         .status(404)
         .json({ error: "School not set up yet. Contact the director." });
@@ -86,7 +79,6 @@ export default async function handler(req, res) {
     const storedHash = school.staffJoinCodeHash;
 
     if (!storedHash) {
-      await deleteAuthUser(uid);
       return res.status(403).json({
         error:
           "Staff signups are not enabled. Ask the director to generate a join code.",
@@ -95,8 +87,11 @@ export default async function handler(req, res) {
 
     const providedHash = hashCode(code);
     if (providedHash !== storedHash) {
-      await deleteAuthUser(uid);
-      return res.status(401).json({ error: "Invalid staff join code." });
+      return res
+        .status(401)
+        .json({
+          error: "Invalid staff join code. Please check with your director.",
+        });
     }
 
     const existingSnap = await db.doc(`users/${uid}`).get();
@@ -127,7 +122,6 @@ export default async function handler(req, res) {
     return res.status(200).json({ success: true, uid });
   } catch (err) {
     console.error("staff-signup error:", err);
-    await deleteAuthUser(uid);
     return res.status(500).json({
       error: "Something went wrong. Please try again.",
     });
