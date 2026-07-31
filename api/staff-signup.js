@@ -1,49 +1,17 @@
 /**
- * POST /api/staff-signup — v2 hardened
+ * POST /api/staff-signup — v3
  *
- * Validates the staff join code, creates the user doc, and cleans up the
- * Firebase Auth account if the code is invalid.
- *
- * v2: robust private key parsing — accepts \n (literal), real newlines,
- * or the value wrapped in quotes. All formats normalize to a valid PEM.
+ * Now uses the shared firebase-admin helper which reads a single
+ * FIREBASE_SERVICE_ACCOUNT_JSON env var (much less error-prone than the
+ * 3-variable format).
  */
 
-import { initializeApp, cert, getApps } from "firebase-admin/app";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { getAuth } from "firebase-admin/auth";
 import crypto from "crypto";
+import { ensureFirebaseAdmin } from "./_firebase-admin.js";
 
-/**
- * Normalize the FIREBASE_PRIVATE_KEY env var into a valid PEM string.
- * Handles:
- *   - literal \n characters (as pasted from JSON: "-----BEGIN...\nMIIE...")
- *   - real newline characters (as pasted by Vercel's textarea after \n→\n conversion)
- *   - values wrapped in surrounding "quotes"
- */
-function parsePrivateKey(raw) {
-  if (!raw) return "";
-  let key = String(raw).trim();
-  // Strip surrounding quotes if present
-  if (
-    (key.startsWith('"') && key.endsWith('"')) ||
-    (key.startsWith("'") && key.endsWith("'"))
-  ) {
-    key = key.slice(1, -1);
-  }
-  // Convert literal \n to real newlines
-  key = key.replace(/\\n/g, "\n");
-  return key;
-}
-
-if (!getApps().length) {
-  initializeApp({
-    credential: cert({
-      projectId: process.env.FIREBASE_PROJECT_ID,
-      clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-      privateKey: parsePrivateKey(process.env.FIREBASE_PRIVATE_KEY),
-    }),
-  });
-}
+ensureFirebaseAdmin();
 
 const db = getFirestore();
 const auth = getAuth();
@@ -145,17 +113,13 @@ export default async function handler(req, res) {
       role: "teacher",
       status: "pending",
       active: true,
-
       proposedSubjects: Array.isArray(subjects) ? subjects : [],
       proposedClassTeacherOf: classId || null,
-
       assignedClasses: [],
       assignedSubjects: [],
       classTeacherOf: null,
       permissions: {},
-
       signupNote: (note || "").trim(),
-
       createdAt: FieldValue.serverTimestamp(),
       updatedAt: FieldValue.serverTimestamp(),
     });
@@ -163,12 +127,9 @@ export default async function handler(req, res) {
     return res.status(200).json({ success: true, uid });
   } catch (err) {
     console.error("staff-signup error:", err);
-    console.error("Error name:", err.name);
-    console.error("Error code:", err.code);
     await deleteAuthUser(uid);
     return res.status(500).json({
       error: "Something went wrong. Please try again.",
-      debug: process.env.NODE_ENV !== "production" ? err.message : undefined,
     });
   }
 }

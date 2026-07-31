@@ -1,26 +1,12 @@
 /**
- * POST /api/check-result
- *
- * v3 — returns full school object (gradingScale, signature, stamp) so the
- * PDF template can render everything the admin view shows.
+ * POST /api/check-result — v4 with shared admin helper
  */
 
-import { initializeApp, cert, getApps } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
 import crypto from "crypto";
+import { ensureFirebaseAdmin } from "./_firebase-admin.js";
 
-if (!getApps().length) {
-  initializeApp({
-    credential: cert({
-      projectId: process.env.FIREBASE_PROJECT_ID,
-      clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-      privateKey: (process.env.FIREBASE_PRIVATE_KEY || "").replace(
-        /\\n/g,
-        "\n",
-      ),
-    }),
-  });
-}
+ensureFirebaseAdmin();
 
 const db = getFirestore();
 
@@ -112,8 +98,6 @@ export default async function handler(req, res) {
     const schoolSnap = await db.doc("school/root").get();
     const schoolData = schoolSnap.exists ? schoolSnap.data() : {};
 
-    // Return the FULL school object so PDF template has everything
-    // (gradingScale, signature, stamp, contact object, etc.)
     return res.status(200).json({
       student: {
         id: studentDoc.id,
@@ -129,9 +113,7 @@ export default async function handler(req, res) {
         height: student.height || null,
       },
       school: {
-        // Include everything — the template picks what it needs
         ...schoolData,
-        // Ensure these string field aliases exist (template checks both)
         phone: schoolData.phone || schoolData.contact?.phone || "",
         email: schoolData.email || schoolData.contact?.email || "",
         website: schoolData.website || schoolData.contact?.website || "",
