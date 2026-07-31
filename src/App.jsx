@@ -18,15 +18,19 @@ import ReportsBrowsePage from "./pages/reports/ReportsBrowsePage";
 import ReportDesignPage from "./pages/reports/ReportDesignPage";
 import SettingsPage from "./pages/settings/SettingsPage";
 
-// NEW — public school website
+// Public school website
 import HomePage from "./pages/site/HomePage";
 import ProgramsPage from "./pages/site/ProgramsPage";
 import AboutPage from "./pages/site/AboutPage";
 import EventsPage from "./pages/site/EventsPage";
 import ContactPage from "./pages/site/ContactPage";
 
-// NEW — parent result checker portal
+// Parent result checker portal
 import CheckResultPage from "./pages/public/CheckResultPage";
+
+// Staff signup + pending
+import StaffJoinPage from "./pages/staff/StaffJoinPage";
+import StaffPendingPage from "./pages/staff/StaffPendingPage";
 
 export default function App() {
   return (
@@ -59,6 +63,8 @@ function SchoolApp() {
   const { school } = useSchool();
   if (loading) return <Spinner label="Signing you in…" />;
 
+  const isPending = user && profile?.status === "pending";
+
   return (
     <Routes>
       {/* ─── PUBLIC — no login required ─── */}
@@ -72,10 +78,42 @@ function SchoolApp() {
       {/* Parent result checker */}
       <Route path="/check-result" element={<CheckResultPage />} />
 
-      {/* Login — sends you to dashboard if already signed in */}
+      {/* Staff signup — public but redirects if already signed in */}
+      <Route
+        path="/staff-join"
+        element={
+          user ? <Navigate to="/dashboard" replace /> : <StaffJoinPage />
+        }
+      />
+
+      {/* Login — sends you to right place if already signed in */}
       <Route
         path="/login"
-        element={user ? <Navigate to="/dashboard" replace /> : <Login />}
+        element={
+          user ? (
+            isPending ? (
+              <Navigate to="/staff-pending" replace />
+            ) : (
+              <Navigate to="/dashboard" replace />
+            )
+          ) : (
+            <Login />
+          )
+        }
+      />
+
+      {/* Pending — only relevant when signed in and status='pending' */}
+      <Route
+        path="/staff-pending"
+        element={
+          !user ? (
+            <Navigate to="/login" replace />
+          ) : !isPending ? (
+            <Navigate to="/dashboard" replace />
+          ) : (
+            <StaffPendingPage />
+          )
+        }
       />
 
       {/* ─── ADMIN — login required ─── */}
@@ -172,6 +210,9 @@ function SchoolApp() {
 
 function AdminRoute({ user, profile, school, children }) {
   if (!user) return <Navigate to="/login" replace />;
+  // Pending users can't access admin pages — bounce to pending screen
+  if (profile?.status === "pending")
+    return <Navigate to="/staff-pending" replace />;
   const needsSetup = !school || !school.setupComplete;
   if (needsSetup) {
     if (profile?.role === "director") return <Navigate to="/setup" replace />;
@@ -182,6 +223,8 @@ function AdminRoute({ user, profile, school, children }) {
 
 function SetupRoute({ user, profile }) {
   if (!user) return <Navigate to="/login" replace />;
+  if (profile?.status === "pending")
+    return <Navigate to="/staff-pending" replace />;
   if (profile?.role !== "director") return <SetupInProgress />;
   return <SetupWizard />;
 }
