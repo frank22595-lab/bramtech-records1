@@ -61,21 +61,23 @@ function Router() {
 function SchoolApp() {
   const { user, profile, loading } = useAuth();
   const { school } = useSchool();
+
   if (loading) return <Spinner label="Signing you in…" />;
 
-  const isPending = user && profile?.status === "pending";
+  // If a user is signed in but their profile hasn't loaded yet (e.g. a fresh
+  // signup where the API is still writing the doc), show a spinner. Do not
+  // treat "profile null" as "no permissions" — that leads to wrong redirects.
+  const profileLoading = user && !profile;
+  const isPending = profile?.status === "pending";
 
   return (
     <Routes>
       {/* ─── PUBLIC — no login required ─── */}
-      {/* School's public marketing site */}
       <Route path="/" element={<HomePage />} />
       <Route path="/programs" element={<ProgramsPage />} />
       <Route path="/about" element={<AboutPage />} />
       <Route path="/events" element={<EventsPage />} />
       <Route path="/contact" element={<ContactPage />} />
-
-      {/* Parent result checker */}
       <Route path="/check-result" element={<CheckResultPage />} />
 
       {/* Staff signup — public but redirects if already signed in */}
@@ -90,25 +92,27 @@ function SchoolApp() {
       <Route
         path="/login"
         element={
-          user ? (
-            isPending ? (
-              <Navigate to="/staff-pending" replace />
-            ) : (
-              <Navigate to="/dashboard" replace />
-            )
-          ) : (
+          !user ? (
             <Login />
+          ) : profileLoading ? (
+            <Spinner label="Loading your account…" />
+          ) : isPending ? (
+            <Navigate to="/staff-pending" replace />
+          ) : (
+            <Navigate to="/dashboard" replace />
           )
         }
       />
 
-      {/* Pending — only relevant when signed in and status='pending' */}
+      {/* Pending — the pending page itself handles the "still loading profile"
+          state internally, so we render it even if profile isn't loaded yet.
+          Only redirect AWAY if profile is loaded and confirmed not pending. */}
       <Route
         path="/staff-pending"
         element={
           !user ? (
             <Navigate to="/login" replace />
-          ) : !isPending ? (
+          ) : profile && !isPending ? (
             <Navigate to="/dashboard" replace />
           ) : (
             <StaffPendingPage />
@@ -116,11 +120,16 @@ function SchoolApp() {
         }
       />
 
-      {/* ─── ADMIN — login required ─── */}
+      {/* ─── ADMIN — login required + profile required ─── */}
       <Route
         path="/dashboard"
         element={
-          <AdminRoute user={user} profile={profile} school={school}>
+          <AdminRoute
+            user={user}
+            profile={profile}
+            profileLoading={profileLoading}
+            school={school}
+          >
             <Dashboard />
           </AdminRoute>
         }
@@ -128,7 +137,12 @@ function SchoolApp() {
       <Route
         path="/school"
         element={
-          <AdminRoute user={user} profile={profile} school={school}>
+          <AdminRoute
+            user={user}
+            profile={profile}
+            profileLoading={profileLoading}
+            school={school}
+          >
             <SchoolPage />
           </AdminRoute>
         }
@@ -136,7 +150,12 @@ function SchoolApp() {
       <Route
         path="/school/:tab"
         element={
-          <AdminRoute user={user} profile={profile} school={school}>
+          <AdminRoute
+            user={user}
+            profile={profile}
+            profileLoading={profileLoading}
+            school={school}
+          >
             <SchoolPage />
           </AdminRoute>
         }
@@ -144,7 +163,12 @@ function SchoolApp() {
       <Route
         path="/terms"
         element={
-          <AdminRoute user={user} profile={profile} school={school}>
+          <AdminRoute
+            user={user}
+            profile={profile}
+            profileLoading={profileLoading}
+            school={school}
+          >
             <TermsListPage />
           </AdminRoute>
         }
@@ -152,7 +176,12 @@ function SchoolApp() {
       <Route
         path="/terms/:termId"
         element={
-          <AdminRoute user={user} profile={profile} school={school}>
+          <AdminRoute
+            user={user}
+            profile={profile}
+            profileLoading={profileLoading}
+            school={school}
+          >
             <TermWorkspace />
           </AdminRoute>
         }
@@ -160,7 +189,12 @@ function SchoolApp() {
       <Route
         path="/terms/:termId/:tab"
         element={
-          <AdminRoute user={user} profile={profile} school={school}>
+          <AdminRoute
+            user={user}
+            profile={profile}
+            profileLoading={profileLoading}
+            school={school}
+          >
             <TermWorkspace />
           </AdminRoute>
         }
@@ -168,7 +202,12 @@ function SchoolApp() {
       <Route
         path="/reports"
         element={
-          <AdminRoute user={user} profile={profile} school={school}>
+          <AdminRoute
+            user={user}
+            profile={profile}
+            profileLoading={profileLoading}
+            school={school}
+          >
             <ReportsBrowsePage />
           </AdminRoute>
         }
@@ -176,7 +215,12 @@ function SchoolApp() {
       <Route
         path="/reports/design"
         element={
-          <AdminRoute user={user} profile={profile} school={school}>
+          <AdminRoute
+            user={user}
+            profile={profile}
+            profileLoading={profileLoading}
+            school={school}
+          >
             <ReportDesignPage />
           </AdminRoute>
         }
@@ -184,7 +228,12 @@ function SchoolApp() {
       <Route
         path="/settings"
         element={
-          <AdminRoute user={user} profile={profile} school={school}>
+          <AdminRoute
+            user={user}
+            profile={profile}
+            profileLoading={profileLoading}
+            school={school}
+          >
             <SettingsPage />
           </AdminRoute>
         }
@@ -192,25 +241,35 @@ function SchoolApp() {
       <Route
         path="/settings/:tab"
         element={
-          <AdminRoute user={user} profile={profile} school={school}>
+          <AdminRoute
+            user={user}
+            profile={profile}
+            profileLoading={profileLoading}
+            school={school}
+          >
             <SettingsPage />
           </AdminRoute>
         }
       />
       <Route
         path="/setup/*"
-        element={<SetupRoute user={user} profile={profile} />}
+        element={
+          <SetupRoute
+            user={user}
+            profile={profile}
+            profileLoading={profileLoading}
+          />
+        }
       />
 
-      {/* Fallback: unknown paths go to the public home */}
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
 }
 
-function AdminRoute({ user, profile, school, children }) {
+function AdminRoute({ user, profile, profileLoading, school, children }) {
   if (!user) return <Navigate to="/login" replace />;
-  // Pending users can't access admin pages — bounce to pending screen
+  if (profileLoading) return <Spinner label="Loading your account…" />;
   if (profile?.status === "pending")
     return <Navigate to="/staff-pending" replace />;
   const needsSetup = !school || !school.setupComplete;
@@ -221,8 +280,9 @@ function AdminRoute({ user, profile, school, children }) {
   return <Layout>{children}</Layout>;
 }
 
-function SetupRoute({ user, profile }) {
+function SetupRoute({ user, profile, profileLoading }) {
   if (!user) return <Navigate to="/login" replace />;
+  if (profileLoading) return <Spinner label="Loading your account…" />;
   if (profile?.status === "pending")
     return <Navigate to="/staff-pending" replace />;
   if (profile?.role !== "director") return <SetupInProgress />;

@@ -1,93 +1,91 @@
-import { useState, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
-import { createUserWithEmailAndPassword, updateProfile } from 'firebase/auth'
-import { getFirebase } from '../../config/firebase'
-import { formatStaffCode } from '../../lib/staffCode'
-import { Loader2, Check, X, ChevronRight, ChevronLeft, GraduationCap } from 'lucide-react'
+import { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
+import { createUserWithEmailAndPassword, updateProfile } from "firebase/auth";
+import { getFirebase } from "../../config/firebase";
+import { formatStaffCode } from "../../lib/staffCode";
+import {
+  Loader2,
+  Check,
+  X,
+  ChevronRight,
+  ChevronLeft,
+  GraduationCap,
+  CheckSquare,
+  Square,
+} from "lucide-react";
 
-/**
- * Public staff join page.
- * Route: /staff-join
- *
- * Two steps:
- *   1. Enter staff join code
- *   2. Fill signup form (name, email, password, phone, subjects, class, note)
- *
- * On submit:
- *   - Client creates Firebase Auth account
- *   - Client calls /api/staff-signup with the code + profile
- *   - API validates code, creates user doc with status='pending'
- *   - Redirect to /staff-pending
- */
 export default function StaffJoinPage() {
-  const navigate = useNavigate()
-  const { auth } = getFirebase()
-  const [step, setStep] = useState(1)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
+  const navigate = useNavigate();
+  const { auth } = getFirebase();
+  const [step, setStep] = useState(1);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
 
-  // Step 1: code
-  const [code, setCode] = useState('')
+  const [code, setCode] = useState("");
 
-  // Step 2: profile
-  const [fullName, setFullName] = useState('')
-  const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
-  const [confirmPassword, setConfirmPassword] = useState('')
-  const [phone, setPhone] = useState('')
-  const [selectedSubjects, setSelectedSubjects] = useState([])
-  const [classId, setClassId] = useState('')
-  const [note, setNote] = useState('')
+  const [fullName, setFullName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [phone, setPhone] = useState("");
+  const [selectedSubjects, setSelectedSubjects] = useState([]);
+  const [classId, setClassId] = useState("");
+  const [note, setNote] = useState("");
 
-  // School data for dropdowns
-  const [schoolInfo, setSchoolInfo] = useState(null)
+  const [schoolInfo, setSchoolInfo] = useState(null);
 
   useEffect(() => {
-    fetch('/api/school-info')
-      .then(r => r.json())
-      .then(data => setSchoolInfo(data))
-      .catch(err => console.error('Failed to load school info:', err))
-  }, [])
+    fetch("/api/school-info")
+      .then((r) => r.json())
+      .then((data) => setSchoolInfo(data))
+      .catch((err) => console.error("Failed to load school info:", err));
+  }, []);
 
   const proceedToStep2 = (e) => {
-    e.preventDefault()
-    setError('')
+    e.preventDefault();
+    setError("");
     if (!code.trim()) {
-      setError('Please enter the staff join code.')
-      return
+      setError("Please enter the staff join code.");
+      return;
     }
-    // We don't pre-validate the code — that happens on submit. This avoids
-    // exposing a "guess the code" endpoint.
-    setStep(2)
-  }
+    setStep(2);
+  };
 
   const submit = async (e) => {
-    e.preventDefault()
-    setError('')
+    e.preventDefault();
+    setError("");
 
-    if (!fullName.trim()) return setError('Full name is required.')
-    if (!email.trim()) return setError('Email is required.')
-    if (password.length < 6) return setError('Password must be at least 6 characters.')
-    if (password !== confirmPassword) return setError('Passwords do not match.')
-    if (!classId) return setError('Please select which class you teach or want to be class teacher of.')
+    if (!fullName.trim()) return setError("Full name is required.");
+    if (!email.trim()) return setError("Email is required.");
+    if (password.length < 6)
+      return setError("Password must be at least 6 characters.");
+    if (password !== confirmPassword)
+      return setError("Passwords do not match.");
+    if (!classId)
+      return setError(
+        "Please select which class you teach or want to be class teacher of.",
+      );
 
-    setLoading(true)
+    setLoading(true);
 
-    let createdUid = null
+    let createdUid = null;
     try {
-      // 1. Create Firebase Auth account
-      const userCred = await createUserWithEmailAndPassword(auth, email.trim(), password)
-      createdUid = userCred.user.uid
+      const userCred = await createUserWithEmailAndPassword(
+        auth,
+        email.trim(),
+        password,
+      );
+      createdUid = userCred.user.uid;
 
-      // Set displayName so it shows in the auth console
       try {
-        await updateProfile(userCred.user, { displayName: fullName.trim() })
-      } catch { /* non-critical */ }
+        await updateProfile(userCred.user, { displayName: fullName.trim() });
+      } catch {
+        /* non-critical */
+      }
 
-      // 2. Call the signup API to validate code + create user doc
-      const res = await fetch('/api/staff-signup', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+      const res = await fetch("/api/staff-signup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           code: code.trim(),
           uid: createdUid,
@@ -98,41 +96,47 @@ export default function StaffJoinPage() {
           classId,
           note: note.trim(),
         }),
-      })
+      });
 
-      const data = await res.json()
+      const data = await res.json();
 
       if (!res.ok) {
-        // API failed — it will have already deleted the auth user if code was invalid
-        throw new Error(data.error || 'Signup failed.')
+        throw new Error(data.error || "Signup failed.");
       }
 
-      // 3. Redirect to the pending page (preserve ?school= param)
-      navigate(`/staff-pending${window.location.search}`, { replace: true })
+      navigate(`/staff-pending${window.location.search}`, { replace: true });
     } catch (err) {
-      console.error('Signup error:', err)
+      console.error("Signup error:", err);
 
-      let msg = err.message || 'Signup failed. Please try again.'
-      if (err.code === 'auth/email-already-in-use') {
-        msg = 'This email already has an account. Try logging in instead.'
-      } else if (err.code === 'auth/invalid-email') {
-        msg = 'That does not look like a valid email address.'
-      } else if (err.code === 'auth/weak-password') {
-        msg = 'Password is too weak. Try at least 6 characters with a mix of letters and numbers.'
+      let msg = err.message || "Signup failed. Please try again.";
+      if (err.code === "auth/email-already-in-use") {
+        msg = "This email already has an account. Try logging in instead.";
+      } else if (err.code === "auth/invalid-email") {
+        msg = "That does not look like a valid email address.";
+      } else if (err.code === "auth/weak-password") {
+        msg =
+          "Password is too weak. Try at least 6 characters with a mix of letters and numbers.";
       }
 
-      setError(msg)
-      setLoading(false)
+      setError(msg);
+      setLoading(false);
     }
-  }
+  };
 
   const toggleSubject = (subjectId) => {
-    setSelectedSubjects(prev =>
+    setSelectedSubjects((prev) =>
       prev.includes(subjectId)
-        ? prev.filter(id => id !== subjectId)
-        : [...prev, subjectId]
-    )
-  }
+        ? prev.filter((id) => id !== subjectId)
+        : [...prev, subjectId],
+    );
+  };
+
+  const selectAllSubjects = () => {
+    if (!schoolInfo?.subjects) return;
+    setSelectedSubjects(schoolInfo.subjects.map((s) => s.id));
+  };
+
+  const deselectAllSubjects = () => setSelectedSubjects([]);
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col">
@@ -141,25 +145,41 @@ export default function StaffJoinPage() {
           <GraduationCap className="w-5 h-5 text-slate-700" />
           <span className="font-semibold text-slate-900">Staff sign up</span>
           {schoolInfo?.school?.name && (
-            <span className="text-slate-500 text-sm ml-2">— {schoolInfo.school.name}</span>
+            <span className="text-slate-500 text-sm ml-2">
+              — {schoolInfo.school.name}
+            </span>
           )}
         </div>
       </header>
 
       <main className="flex-1 flex items-center justify-center px-4 py-8">
         <div className="max-w-lg w-full">
-          {/* Step indicator */}
           <div className="flex items-center justify-center gap-3 mb-8">
-            <StepDot label="Code" number={1} active={step === 1} done={step > 1} />
-            <div className={`h-0.5 w-12 ${step > 1 ? 'bg-slate-900' : 'bg-slate-300'}`} />
-            <StepDot label="Your details" number={2} active={step === 2} done={false} />
+            <StepDot
+              label="Code"
+              number={1}
+              active={step === 1}
+              done={step > 1}
+            />
+            <div
+              className={`h-0.5 w-12 ${step > 1 ? "bg-slate-900" : "bg-slate-300"}`}
+            />
+            <StepDot
+              label="Your details"
+              number={2}
+              active={step === 2}
+              done={false}
+            />
           </div>
 
           {step === 1 && (
             <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 md:p-8">
-              <h1 className="text-2xl font-semibold text-slate-900 mb-2">Enter the join code</h1>
+              <h1 className="text-2xl font-semibold text-slate-900 mb-2">
+                Enter the join code
+              </h1>
               <p className="text-sm text-slate-600 mb-6">
-                Your director will have shared a staff join code in the school WhatsApp group. Enter it below to continue.
+                Your director will have shared a staff join code in the school
+                WhatsApp group. Enter it below to continue.
               </p>
 
               <form onSubmit={proceedToStep2} className="space-y-4">
@@ -196,14 +216,17 @@ export default function StaffJoinPage() {
               </form>
 
               <p className="text-xs text-center text-slate-500 mt-6">
-                Don't have the code? Ask your director or check the school WhatsApp group.
+                Don't have the code? Ask your director or check the school
+                WhatsApp group.
               </p>
             </div>
           )}
 
           {step === 2 && (
             <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 md:p-8">
-              <h1 className="text-2xl font-semibold text-slate-900 mb-2">Tell us about yourself</h1>
+              <h1 className="text-2xl font-semibold text-slate-900 mb-2">
+                Tell us about yourself
+              </h1>
               <p className="text-sm text-slate-600 mb-6">
                 This is what the director will see when approving your account.
               </p>
@@ -259,7 +282,8 @@ export default function StaffJoinPage() {
                 {schoolInfo?.classes?.length > 0 && (
                   <div>
                     <label className="block text-sm font-medium text-slate-700 mb-1.5">
-                      Which class do you teach? <span className="text-red-500">*</span>
+                      Which class do you teach?{" "}
+                      <span className="text-red-500">*</span>
                     </label>
                     <select
                       value={classId}
@@ -268,8 +292,10 @@ export default function StaffJoinPage() {
                       required
                     >
                       <option value="">— select your class —</option>
-                      {schoolInfo.classes.map(c => (
-                        <option key={c.id} value={c.id}>{c.name}</option>
+                      {schoolInfo.classes.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.name}
+                        </option>
                       ))}
                     </select>
                     <p className="text-xs text-slate-500 mt-1">
@@ -280,16 +306,41 @@ export default function StaffJoinPage() {
 
                 {schoolInfo?.subjects?.length > 0 && (
                   <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-1.5">
-                      Which subjects do you teach? <span className="text-slate-500 font-normal">(select all that apply)</span>
-                    </label>
+                    <div className="flex items-baseline justify-between mb-1.5">
+                      <label className="block text-sm font-medium text-slate-700">
+                        Which subjects do you teach?
+                      </label>
+                      <div className="flex gap-2 text-xs">
+                        <button
+                          type="button"
+                          onClick={selectAllSubjects}
+                          className="text-slate-700 hover:text-slate-900 font-medium flex items-center gap-1"
+                        >
+                          <CheckSquare className="w-3.5 h-3.5" />
+                          Select all
+                        </button>
+                        <span className="text-slate-300">·</span>
+                        <button
+                          type="button"
+                          onClick={deselectAllSubjects}
+                          className="text-slate-500 hover:text-slate-700 flex items-center gap-1"
+                        >
+                          <Square className="w-3.5 h-3.5" />
+                          Clear
+                        </button>
+                      </div>
+                    </div>
+                    <p className="text-xs text-slate-500 mb-2">
+                      In many primary schools, one teacher takes all subjects in
+                      their class. Tap "Select all" if that's you.
+                    </p>
                     <div className="border border-slate-300 rounded-lg p-3 max-h-48 overflow-y-auto space-y-1">
-                      {schoolInfo.subjects.map(s => {
-                        const checked = selectedSubjects.includes(s.id)
+                      {schoolInfo.subjects.map((s) => {
+                        const checked = selectedSubjects.includes(s.id);
                         return (
                           <label
                             key={s.id}
-                            className={`flex items-center gap-2 p-2 rounded cursor-pointer text-sm ${checked ? 'bg-slate-100' : 'hover:bg-slate-50'}`}
+                            className={`flex items-center gap-2 p-2 rounded cursor-pointer text-sm ${checked ? "bg-slate-100" : "hover:bg-slate-50"}`}
                           >
                             <input
                               type="checkbox"
@@ -299,7 +350,7 @@ export default function StaffJoinPage() {
                             />
                             <span>{s.name}</span>
                           </label>
-                        )
+                        );
                       })}
                     </div>
                   </div>
@@ -307,7 +358,10 @@ export default function StaffJoinPage() {
 
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1.5">
-                    Note to director <span className="text-slate-500 font-normal">(optional)</span>
+                    Note to director{" "}
+                    <span className="text-slate-500 font-normal">
+                      (optional)
+                    </span>
                   </label>
                   <textarea
                     value={note}
@@ -341,10 +395,13 @@ export default function StaffJoinPage() {
                   >
                     {loading ? (
                       <>
-                        <Loader2 className="w-4 h-4 animate-spin" /> Creating account…
+                        <Loader2 className="w-4 h-4 animate-spin" /> Creating
+                        account…
                       </>
                     ) : (
-                      <>Sign up <Check className="w-4 h-4" /></>
+                      <>
+                        Sign up <Check className="w-4 h-4" />
+                      </>
                     )}
                   </button>
                 </div>
@@ -354,7 +411,7 @@ export default function StaffJoinPage() {
         </div>
       </main>
     </div>
-  )
+  );
 }
 
 function StepDot({ number, label, active, done }) {
@@ -362,21 +419,33 @@ function StepDot({ number, label, active, done }) {
     <div className="flex items-center gap-2">
       <div
         className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-semibold ${
-          done ? 'bg-emerald-600 text-white'
-          : active ? 'bg-slate-900 text-white ring-4 ring-slate-100'
-          : 'bg-slate-200 text-slate-500'
+          done
+            ? "bg-emerald-600 text-white"
+            : active
+              ? "bg-slate-900 text-white ring-4 ring-slate-100"
+              : "bg-slate-200 text-slate-500"
         }`}
       >
         {done ? <Check className="w-4 h-4" /> : number}
       </div>
-      <span className={`text-sm ${active ? 'font-semibold text-slate-900' : 'text-slate-500'}`}>
+      <span
+        className={`text-sm ${active ? "font-semibold text-slate-900" : "text-slate-500"}`}
+      >
         {label}
       </span>
     </div>
-  )
+  );
 }
 
-function Input({ label, value, onChange, placeholder, type = 'text', required = false, autoComplete }) {
+function Input({
+  label,
+  value,
+  onChange,
+  placeholder,
+  type = "text",
+  required = false,
+  autoComplete,
+}) {
   return (
     <div>
       <label className="block text-sm font-medium text-slate-700 mb-1.5">
@@ -392,5 +461,5 @@ function Input({ label, value, onChange, placeholder, type = 'text', required = 
         className="w-full px-3 py-2.5 border border-slate-300 rounded-lg focus:outline-none focus:border-slate-500 focus:ring-1 focus:ring-slate-500"
       />
     </div>
-  )
+  );
 }

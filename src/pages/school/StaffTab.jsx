@@ -1,66 +1,117 @@
-import { useEffect, useState, useMemo } from 'react'
-import { collection, query, onSnapshot, orderBy, doc, deleteDoc } from 'firebase/firestore'
-import { Users, Clock, CheckCircle, User, ChevronRight, Trash2, Mail, Phone } from 'lucide-react'
-import { useSchool } from '../../contexts/SchoolContext'
-import { getFirebase } from '../../config/firebase'
-import { Spinner, Card } from '../../components/ui'
-import StaffCodeSection from '../../components/staff/StaffCodeSection'
-import StaffApprovalModal from '../../components/staff/StaffApprovalModal'
+import { useEffect, useState, useMemo } from "react";
+import { collection, onSnapshot, doc, deleteDoc } from "firebase/firestore";
+import {
+  Users,
+  Clock,
+  CheckCircle,
+  User,
+  ChevronRight,
+  Trash2,
+  Mail,
+  Phone,
+} from "lucide-react";
+import { useSchool } from "../../contexts/SchoolContext";
+import { useAuth } from "../../contexts/AuthContext";
+import { getFirebase } from "../../config/firebase";
+import { Spinner, Card } from "../../components/ui";
+import StaffCodeSection from "../../components/staff/StaffCodeSection";
+import StaffApprovalModal from "../../components/staff/StaffApprovalModal";
 
 /**
  * Director's Staff tab.
- * Shows:
- *   1. The staff join code (with copy + WhatsApp)
- *   2. Pending teachers waiting for approval
- *   3. Approved (active) staff — click to edit
+ * v2 — client-side sort (Firestore orderBy excludes docs without the field),
+ * and includes debug logging so it's obvious when users aren't loading.
  */
 export default function StaffTab() {
-  const { db } = getFirebase()
-  const { school } = useSchool()
-  const [users, setUsers] = useState([])
-  const [loading, setLoading] = useState(true)
-  const [selected, setSelected] = useState(null)
+  const { db } = getFirebase();
+  const { school } = useSchool();
+  const { user: currentUser } = useAuth();
+  const [users, setUsers] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [selected, setSelected] = useState(null);
 
   useEffect(() => {
-    const q = query(collection(db, 'users'), orderBy('createdAt', 'desc'))
+    // Query WITHOUT orderBy so docs missing createdAt still come through
     const unsub = onSnapshot(
-      q,
+      collection(db, "users"),
       (snap) => {
-        setUsers(snap.docs.map(d => ({ id: d.id, ...d.data() })))
-        setLoading(false)
+        const docs = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+
+        // Sort newest first, client-side, safe for docs missing createdAt
+        docs.sort((a, b) => {
+          const ta =
+            a.createdAt?.toMillis?.() ||
+            (a.createdAt?.seconds || 0) * 1000 ||
+            0;
+          const tb =
+            b.createdAt?.toMillis?.() ||
+            (b.createdAt?.seconds || 0) * 1000 ||
+            0;
+          return tb - ta;
+        });
+
+        console.log(
+          "[StaffTab] Loaded",
+          docs.length,
+          "user(s):",
+          docs.map((u) => ({
+            id: u.id,
+            name: u.fullName,
+            role: u.role,
+            status: u.status,
+          })),
+        );
+
+        setUsers(docs);
+        setLoading(false);
+        setError("");
       },
       (err) => {
-        console.error('Users load error:', err)
-        setLoading(false)
+        console.error("[StaffTab] Users load error:", err);
+        setError(err.message || "Could not load users.");
+        setLoading(false);
       },
-    )
-    return () => unsub()
-  }, [db])
+    );
+    return () => unsub();
+  }, [db]);
 
   const { pending, active } = useMemo(() => {
-    const p = users.filter(u => u.status === 'pending')
-    const a = users.filter(u => u.status !== 'pending' && u.role !== 'director')
-    return { pending: p, active: a }
-  }, [users])
+    const p = users.filter((u) => u.status === "pending");
+    // Show everyone except the currently logged-in director
+    const a = users.filter(
+      (u) => u.status !== "pending" && u.id !== currentUser?.uid,
+    );
+    return { pending: p, active: a };
+  }, [users, currentUser?.uid]);
 
   const handleReject = async (user) => {
-    if (!confirm(`Reject and delete ${user.fullName}'s account? This cannot be undone.`)) return
+    if (
+      !confirm(
+        `Reject and delete ${user.fullName}'s account? This cannot be undone.`,
+      )
+    )
+      return;
     try {
-      await deleteDoc(doc(db, 'users', user.id))
-      // Note: Firebase Auth user still exists. To fully clean up, we'd need
-      // a serverless function. For now, deleting the Firestore doc is enough
-      // to lock them out (they'll be routed to /staff-pending forever).
-      // We could improve later with an /api/staff-reject endpoint.
+      await deleteDoc(doc(db, "users", user.id));
+      // The Firebase Auth user still exists — teacher will just be blocked
+      // at the /staff-pending screen forever with no profile doc.
     } catch (err) {
-      alert('Could not reject: ' + err.message)
+      alert("Could not reject: " + err.message);
     }
-  }
+  };
 
-  if (loading) return <Spinner label="Loading staff…" />
+  if (loading) return <Spinner label="Loading staff…" />;
 
   return (
     <div className="space-y-6">
       <StaffCodeSection school={school} />
+
+      {error && (
+        <div className="text-sm text-red-700 bg-red-50 border border-red-100 p-3 rounded-lg">
+          Error loading staff: {error}
+        </div>
+      )}
 
       {/* Pending */}
       <section>
@@ -75,12 +126,13 @@ export default function StaffTab() {
         {pending.length === 0 ? (
           <Card className="p-6 text-center">
             <p className="text-sm text-slate-500">
-              No pending signups. Once a teacher enters the join code and signs up, they'll appear here.
+              No pending signups. When a teacher enters the join code and signs
+              up, they'll appear here.
             </p>
           </Card>
         ) : (
           <div className="grid gap-2">
-            {pending.map(u => (
+            {pending.map((u) => (
               <PendingStaffRow
                 key={u.id}
                 user={u}
@@ -105,13 +157,18 @@ export default function StaffTab() {
         {active.length === 0 ? (
           <Card className="p-6 text-center">
             <p className="text-sm text-slate-500">
-              No active staff yet. Approve pending signups above to add them here.
+              No active staff yet. Approve pending signups above to add them
+              here.
             </p>
           </Card>
         ) : (
           <div className="grid gap-2">
-            {active.map(u => (
-              <ActiveStaffRow key={u.id} user={u} onClick={() => setSelected(u)} />
+            {active.map((u) => (
+              <ActiveStaffRow
+                key={u.id}
+                user={u}
+                onClick={() => setSelected(u)}
+              />
             ))}
           </div>
         )}
@@ -125,7 +182,7 @@ export default function StaffTab() {
         />
       )}
     </div>
-  )
+  );
 }
 
 function PendingStaffRow({ user, onReview, onReject }) {
@@ -136,7 +193,9 @@ function PendingStaffRow({ user, onReview, onReject }) {
           <User className="w-5 h-5 text-amber-700" />
         </div>
         <div className="flex-1 min-w-0">
-          <div className="font-medium text-slate-900 truncate">{user.fullName}</div>
+          <div className="font-medium text-slate-900 truncate">
+            {user.fullName}
+          </div>
           <div className="text-xs text-slate-500 flex items-center gap-3 mt-0.5 flex-wrap">
             <span className="flex items-center gap-1">
               <Mail className="w-3 h-3" />
@@ -156,8 +215,11 @@ function PendingStaffRow({ user, onReview, onReject }) {
               )}
               {user.signupNote && (
                 <>
-                  {user.proposedSubjects?.length > 0 && ' · '}
-                  <span className="italic">"{user.signupNote.slice(0, 50)}{user.signupNote.length > 50 ? '…' : ''}"</span>
+                  {user.proposedSubjects?.length > 0 && " · "}
+                  <span className="italic">
+                    "{user.signupNote.slice(0, 50)}
+                    {user.signupNote.length > 50 ? "…" : ""}"
+                  </span>
                 </>
               )}
             </div>
@@ -181,25 +243,32 @@ function PendingStaffRow({ user, onReview, onReject }) {
         </div>
       </div>
     </Card>
-  )
+  );
 }
 
 function ActiveStaffRow({ user, onClick }) {
   return (
-    <Card className="p-3 flex items-center gap-3 hover:shadow-md transition-shadow cursor-pointer" onClick={onClick}>
+    <Card
+      className="p-3 flex items-center gap-3 hover:shadow-md transition-shadow cursor-pointer"
+      onClick={onClick}
+    >
       <div className="w-10 h-10 rounded-full bg-emerald-100 flex items-center justify-center flex-shrink-0">
         <User className="w-5 h-5 text-emerald-700" />
       </div>
       <div className="flex-1 min-w-0">
-        <div className="font-medium text-slate-900 truncate">{user.fullName}</div>
+        <div className="font-medium text-slate-900 truncate">
+          {user.fullName}
+        </div>
         <div className="text-xs text-slate-500 mt-0.5">
-          <span className="capitalize">{user.role}</span>
-          {user.classTeacherOf && ' · Class teacher'}
-          {user.assignedClasses?.length > 0 && ` · ${user.assignedClasses.length} classes`}
-          {user.assignedSubjects?.length > 0 && ` · ${user.assignedSubjects.length} subjects`}
+          <span className="capitalize">{user.role || "no role"}</span>
+          {user.classTeacherOf && " · Class teacher"}
+          {user.assignedClasses?.length > 0 &&
+            ` · ${user.assignedClasses.length} classes`}
+          {user.assignedSubjects?.length > 0 &&
+            ` · ${user.assignedSubjects.length} subjects`}
         </div>
       </div>
       <ChevronRight className="w-4 h-4 text-slate-400" />
     </Card>
-  )
+  );
 }
