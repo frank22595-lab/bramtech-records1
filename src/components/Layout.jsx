@@ -25,7 +25,7 @@ const NAV_ITEMS = [
     to: "/school",
     label: "School",
     icon: Building2,
-    roles: ["director", "admin"],
+    roles: ["director", "admin", "teacher"], // ← teacher added
   },
   {
     to: "/terms",
@@ -43,7 +43,7 @@ const NAV_ITEMS = [
     to: "/settings",
     label: "Settings",
     icon: Settings,
-    roles: ["director", "admin"],
+    roles: ["director", "admin"], // teachers still can't access
   },
 ];
 

@@ -9,7 +9,7 @@ import {
   serverTimestamp,
   orderBy,
 } from "firebase/firestore";
-import { Plus, Search, User, X } from "lucide-react";
+import { Plus, Search, User, X, Lock } from "lucide-react";
 import {
   Button,
   Card,
@@ -23,6 +23,7 @@ import StudentAccessCard from "../../components/students/StudentAccessCard";
 import { getFirebase } from "../../config/firebase";
 import { useAuth } from "../../contexts/AuthContext";
 import { useSchool } from "../../contexts/SchoolContext";
+import { usePermissions } from "../../hooks/usePermissions";
 import {
   isCloudinaryConfigured,
   cloudinaryUrl,
@@ -36,6 +37,15 @@ import { generateAccessCode, hashAccessCode } from "../../lib/accessCode";
 
 export default function StudentsTab() {
   const { db } = getFirebase();
+  const {
+    isAdminOrDirector,
+    isTeacher,
+    assignedClasses,
+    classTeacherOf,
+    canAccessClass,
+    canManageStudentsIn,
+  } = usePermissions();
+
   const [classes, setClasses] = useState([]);
   const [students, setStudents] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -67,9 +77,30 @@ export default function StudentsTab() {
     );
   }, [db]);
 
+  // Classes the current user is allowed to see
+  const accessibleClasses = useMemo(() => {
+    if (isAdminOrDirector) return classes;
+    // Teachers: only classes they're assigned to (or class teacher of)
+    return classes.filter((c) => canAccessClass(c.id));
+  }, [classes, isAdminOrDirector, assignedClasses, classTeacherOf]);
+
+  // Set the initial class filter to teacher's class if they only have one
+  useEffect(() => {
+    if (
+      isTeacher &&
+      filterClassId === "all" &&
+      accessibleClasses.length === 1
+    ) {
+      setFilterClassId(accessibleClasses[0].id);
+    }
+  }, [isTeacher, accessibleClasses, filterClassId]);
+
   const filtered = useMemo(() => {
     const term = search.toLowerCase().trim();
     return students.filter((s) => {
+      // Permission check first — teachers only see students in their classes
+      if (!isAdminOrDirector && !canAccessClass(s.classId)) return false;
+
       if (!showInactive && s.active === false) return false;
       if (filterClassId !== "all" && s.classId !== filterClassId) return false;
       if (
@@ -80,18 +111,58 @@ export default function StudentsTab() {
         return false;
       return true;
     });
-  }, [students, filterClassId, showInactive, search]);
+  }, [
+    students,
+    filterClassId,
+    showInactive,
+    search,
+    isAdminOrDirector,
+    assignedClasses,
+    classTeacherOf,
+  ]);
 
-  const activeCount = students.filter((s) => s.active !== false).length;
+  const activeCount = filtered.filter((s) => s.active !== false).length;
+
+  const canAddStudent = isAdminOrDirector || accessibleClasses.length > 0;
 
   return (
     <div>
       <div className="flex items-start justify-between gap-4 mb-4 flex-wrap">
-        <p className="text-sm text-ink-soft">{activeCount} active students</p>
-        <Button onClick={() => setEditing({})}>
-          <Plus className="w-4 h-4" /> Add student
-        </Button>
+        <div>
+          <p className="text-sm text-ink-soft">
+            {activeCount} active student{activeCount === 1 ? "" : "s"}
+            {isTeacher && (
+              <span className="text-ink-soft/70">
+                {" "}
+                (in your {accessibleClasses.length === 1 ? "class" : "classes"})
+              </span>
+            )}
+          </p>
+        </div>
+        {canAddStudent && (
+          <Button onClick={() => setEditing({})}>
+            <Plus className="w-4 h-4" /> Add student
+          </Button>
+        )}
       </div>
+
+      {isTeacher && accessibleClasses.length === 0 && (
+        <Card className="p-6 mb-4 bg-amber-50 border-amber-200">
+          <div className="flex items-start gap-3">
+            <Lock className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+            <div>
+              <p className="text-sm font-medium text-amber-900">
+                No classes assigned yet
+              </p>
+              <p className="text-sm text-amber-800 mt-1">
+                Your director hasn't assigned you to any classes yet. Ask them
+                to assign you a class from the Staff tab so you can start
+                managing students.
+              </p>
+            </div>
+          </div>
+        </Card>
+      )}
 
       <div className="grid md:grid-cols-[1fr_180px_auto] gap-3 mb-4 items-end">
         <div className="relative">
@@ -108,7 +179,7 @@ export default function StudentsTab() {
           onChange={(e) => setFilterClassId(e.target.value)}
         >
           <option value="all">All classes</option>
-          {classes.map((c) => (
+          {accessibleClasses.map((c) => (
             <option key={c.id} value={c.id}>
               {c.name}
             </option>
@@ -143,6 +214,7 @@ export default function StudentsTab() {
               key={s.id}
               student={s}
               classes={classes}
+              canEdit={canManageStudentsIn(s.classId)}
               onEdit={() => setEditing(s)}
             />
           ))}
@@ -152,7 +224,7 @@ export default function StudentsTab() {
       {editing !== null && (
         <StudentModal
           student={editing.id ? editing : null}
-          classes={classes}
+          classes={accessibleClasses}
           onClose={() => setEditing(null)}
         />
       )}
@@ -160,15 +232,17 @@ export default function StudentsTab() {
   );
 }
 
-function StudentRow({ student, classes, onEdit }) {
+function StudentRow({ student, classes, canEdit, onEdit }) {
   const className =
     classes.find((c) => c.id === student.classId)?.name ||
     student.className ||
     "—";
   return (
     <Card
-      className="p-3 flex items-center gap-4 hover:shadow-md transition-shadow cursor-pointer"
-      onClick={onEdit}
+      className={`p-3 flex items-center gap-4 transition-shadow ${
+        canEdit ? "hover:shadow-md cursor-pointer" : "cursor-default opacity-90"
+      }`}
+      onClick={canEdit ? onEdit : undefined}
     >
       <Avatar photoUrl={student.photoUrl} name={student.fullName} />
       <div className="flex-1 min-w-0">
@@ -186,6 +260,9 @@ function StudentRow({ student, classes, onEdit }) {
         </div>
       </div>
       {student.active === false && <Badge tone="warning">Inactive</Badge>}
+      {!canEdit && (
+        <Lock className="w-3.5 h-3.5 text-slate-400" title="Read-only" />
+      )}
     </Card>
   );
 }
@@ -223,6 +300,7 @@ function StudentModal({ student, classes, onClose }) {
   const { db } = getFirebase();
   const { profile } = useAuth();
   const { school } = useSchool();
+  const { isTeacher, classTeacherOf } = usePermissions();
   const isEdit = !!student;
   const cloudinaryReady = isCloudinaryConfigured();
   const [suggestedAdmission, setSuggestedAdmission] = useState("");
@@ -231,7 +309,8 @@ function StudentModal({ student, classes, onClose }) {
       student || {
         fullName: "",
         admissionNumber: "",
-        classId: classes[0]?.id || "",
+        // For teachers: pre-fill with their class teacher class, or first assigned
+        classId: classTeacherOf || classes[0]?.id || "",
         gender: "male",
         dateOfBirth: "",
         weight: "",
@@ -246,8 +325,6 @@ function StudentModal({ student, classes, onClose }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
-  // Preview the next admission number so the admin can see what will be assigned.
-  // Only for new students — edit mode keeps the existing number.
   useEffect(() => {
     if (!isEdit) {
       const acronym = school?.shortName || "STU";
@@ -281,8 +358,6 @@ function StudentModal({ student, classes, onClose }) {
         `stu_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
       const selectedClass = classes.find((c) => c.id === form.classId);
 
-      // For NEW students: auto-generate admission number if admin didn't type one,
-      // and always generate an access code for the parent portal.
       let admissionNumber = (form.admissionNumber || "").trim();
       let extraFields = {};
 
@@ -363,7 +438,6 @@ function StudentModal({ student, classes, onClose }) {
           </button>
         </div>
         <div className="p-6 space-y-4">
-          {/* Parent portal access card — only in edit mode, only if student exists */}
           {isEdit && student && (
             <StudentAccessCard student={student} school={school} />
           )}
@@ -419,6 +493,11 @@ function StudentModal({ student, classes, onClose }) {
               ))}
             </Select>
           </div>
+          {isTeacher && (
+            <p className="text-xs text-ink-soft -mt-2">
+              You can only add students to classes you're assigned to.
+            </p>
+          )}
           <div className="grid md:grid-cols-2 gap-4">
             <Select
               label="Gender"
