@@ -9,25 +9,51 @@ import {
   writeBatch,
   serverTimestamp,
 } from "firebase/firestore";
-import { ClipboardList, Save, AlertCircle, Check } from "lucide-react";
-import { Card, Button, Select, Spinner, Badge } from "../../components/ui";
+import { ClipboardList, Save, AlertCircle, Lock } from "lucide-react";
+import { Card, Button, Select, Spinner } from "../../components/ui";
 import { getFirebase } from "../../config/firebase";
 import { useAuth } from "../../contexts/AuthContext";
 import { useSchool } from "../../contexts/SchoolContext";
+import { usePermissions } from "../../hooks/usePermissions";
 
-export default function ResultsPage() {
+/**
+ * ResultsPage — score entry.
+ *
+ * Props (all optional):
+ *   termOverride  — when embedded in a term workspace, use this term.
+ *                   Falls back to school.currentTermId when standalone.
+ *   readOnly      — disables saving and inputs. Used for archived terms.
+ *   embedded      — hides the top page header (h1 + description).
+ *                   Set by the TermWorkspace ScoresTab wrapper.
+ *
+ * Filtering:
+ *   - Directors/admins: see all classes and all subjects for the chosen class.
+ *   - Teachers: only see their assignedClasses × assignedSubjects.
+ *     (Class teachers must have subjects assigned too — being class teacher
+ *     doesn't grant score entry for subjects you don't teach.)
+ */
+export default function ResultsPage({
+  termOverride,
+  readOnly = false,
+  embedded = false,
+}) {
   const { db } = getFirebase();
   const { profile } = useAuth();
   const { school } = useSchool();
+  const {
+    isAdminOrDirector,
+    isTeacher,
+    assignedClasses,
+    assignedSubjects,
+    canAccessClass,
+  } = usePermissions();
 
   const [terms, setTerms] = useState([]);
   const [classes, setClasses] = useState([]);
   const [subjects, setSubjects] = useState([]);
   const [assessments, setAssessments] = useState([]);
   const [students, setStudents] = useState([]);
-  // scores keyed as { studentId: { assessmentId: number, ... }, ... }
   const [scores, setScores] = useState({});
-  // savedScores tracks what's in the database, so we can show "Saved" badges
   const [savedScores, setSavedScores] = useState({});
   const [loading, setLoading] = useState(true);
 
@@ -36,8 +62,9 @@ export default function ResultsPage() {
   const [saving, setSaving] = useState(false);
   const [savedMsg, setSavedMsg] = useState("");
 
-  const isAdmin = profile?.role === "director" || profile?.role === "admin";
-  const currentTermId = school?.currentTermId;
+  // Which term to use: prop first, else school's current
+  const activeTermId = termOverride?.id || school?.currentTermId;
+  const activeTerm = termOverride || terms.find((t) => t.id === activeTermId);
 
   // Load reference data
   useEffect(() => {
@@ -68,17 +95,33 @@ export default function ResultsPage() {
   }, [db]);
 
   const availableClasses = useMemo(() => {
-    if (isAdmin) return classes.filter((c) => c.active);
-    const assigned = profile?.assignedClasses || [];
-    return classes.filter((c) => c.active && assigned.includes(c.id));
-  }, [classes, isAdmin, profile]);
+    if (isAdminOrDirector) return classes.filter((c) => c.active);
+    return classes.filter((c) => c.active && canAccessClass(c.id));
+  }, [classes, isAdminOrDirector, assignedClasses]);
 
   const availableSubjects = useMemo(() => {
     if (!classId) return [];
-    return subjects.filter(
+    // Subjects assigned to this class
+    const inClass = subjects.filter(
       (s) => s.active && (s.classIds || []).includes(classId),
     );
-  }, [subjects, classId]);
+    if (isAdminOrDirector) return inClass;
+    // Teachers: only subjects they teach (intersection)
+    return inClass.filter((s) => assignedSubjects.includes(s.id));
+  }, [subjects, classId, isAdminOrDirector, assignedSubjects]);
+
+  // Auto-select if teacher only has one option
+  useEffect(() => {
+    if (isTeacher && !classId && availableClasses.length === 1) {
+      setClassId(availableClasses[0].id);
+    }
+  }, [isTeacher, availableClasses, classId]);
+
+  useEffect(() => {
+    if (isTeacher && classId && !subjectId && availableSubjects.length === 1) {
+      setSubjectId(availableSubjects[0].id);
+    }
+  }, [isTeacher, classId, subjectId, availableSubjects]);
 
   // Load students of selected class
   useEffect(() => {
@@ -102,9 +145,9 @@ export default function ResultsPage() {
     return unsub;
   }, [db, classId]);
 
-  // Load ALL existing results for the class+subject+term across every assessment
+  // Load existing results for the class+subject+term
   useEffect(() => {
-    if (!classId || !subjectId || !currentTermId) {
+    if (!classId || !subjectId || !activeTermId) {
       setScores({});
       setSavedScores({});
       return;
@@ -113,7 +156,7 @@ export default function ResultsPage() {
       collection(db, "results"),
       where("classId", "==", classId),
       where("subjectId", "==", subjectId),
-      where("termId", "==", currentTermId),
+      where("termId", "==", activeTermId),
     );
     const unsub = onSnapshot(q, (snap) => {
       const byStudent = {};
@@ -123,10 +166,8 @@ export default function ResultsPage() {
         byStudent[data.studentId][data.assessmentId] = data.score;
       });
       setSavedScores(byStudent);
-      // Pre-fill editing state with saved values (only if scores state is empty)
       setScores((prev) => {
         const merged = { ...byStudent };
-        // Preserve unsaved edits in memory
         Object.entries(prev).forEach(([sid, sMap]) => {
           merged[sid] = { ...(merged[sid] || {}), ...sMap };
         });
@@ -134,9 +175,10 @@ export default function ResultsPage() {
       });
     });
     return unsub;
-  }, [db, classId, subjectId, currentTermId]);
+  }, [db, classId, subjectId, activeTermId]);
 
   const setScore = (studentId, assessmentId, value, maxScore) => {
+    if (readOnly) return;
     if (value === "") {
       setScores((s) => {
         const next = { ...s };
@@ -174,29 +216,26 @@ export default function ResultsPage() {
   const maxTotal = assessments.reduce((sum, a) => sum + (a.maxScore || 0), 0);
 
   const saveAll = async () => {
+    if (readOnly) return;
     setSavedMsg("");
     setSaving(true);
     try {
       const batch = writeBatch(db);
       let count = 0;
-      // For each student, for each assessment they have a value on, upsert a result doc.
-      // Only write cells with values - never overwrite existing scores with blanks.
       for (const student of students) {
         const studentScores = scores[student.id] || {};
         for (const assessment of assessments) {
           const value = studentScores[assessment.id];
           if (value === undefined || value === null || value === "") continue;
-
-          // Skip if unchanged from saved (avoids unnecessary writes)
           const saved = savedScores[student.id]?.[assessment.id];
           if (saved === value) continue;
 
-          const resultId = `${student.id}_${currentTermId}_${subjectId}_${assessment.id}`;
+          const resultId = `${student.id}_${activeTermId}_${subjectId}_${assessment.id}`;
           batch.set(
             doc(db, "results", resultId),
             {
               studentId: student.id,
-              termId: currentTermId,
+              termId: activeTermId,
               classId,
               subjectId,
               assessmentId: assessment.id,
@@ -231,15 +270,17 @@ export default function ResultsPage() {
 
   if (loading)
     return (
-      <div className="p-8">
+      <div className={embedded ? "" : "p-8"}>
         <Spinner />
       </div>
     );
 
-  if (!currentTermId) {
+  if (!activeTermId) {
     return (
-      <div className="p-6 md:p-8 max-w-4xl">
-        <h1 className="text-2xl font-semibold mb-6">Result entry</h1>
+      <div className={embedded ? "" : "p-6 md:p-8 max-w-4xl"}>
+        {!embedded && (
+          <h1 className="text-2xl font-semibold mb-6">Result entry</h1>
+        )}
         <Card className="p-12 text-center">
           <AlertCircle className="w-10 h-10 text-amber-500 mx-auto mb-3" />
           <p className="text-ink-soft mb-1">No current academic term set.</p>
@@ -253,40 +294,71 @@ export default function ResultsPage() {
 
   if (availableClasses.length === 0) {
     return (
-      <div className="p-6 md:p-8 max-w-4xl">
-        <h1 className="text-2xl font-semibold mb-6">Result entry</h1>
-        <Card className="p-12 text-center">
-          <AlertCircle className="w-10 h-10 text-amber-500 mx-auto mb-3" />
-          <p className="text-ink-soft mb-1">
-            You have no classes assigned to you.
-          </p>
-          <p className="text-sm text-ink-soft">
-            Ask your director to assign you to classes in Teachers.
-          </p>
+      <div className={embedded ? "" : "p-6 md:p-8 max-w-4xl"}>
+        {!embedded && (
+          <h1 className="text-2xl font-semibold mb-6">Result entry</h1>
+        )}
+        <Card className="p-6 bg-amber-50 border-amber-200">
+          <div className="flex items-start gap-3">
+            <Lock className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+            <div>
+              <p className="text-sm font-medium text-amber-900">
+                No classes assigned
+              </p>
+              <p className="text-sm text-amber-800 mt-1">
+                Your director hasn't assigned you to any classes yet.
+              </p>
+            </div>
+          </div>
         </Card>
       </div>
     );
   }
 
-  const currentTerm = terms.find((t) => t.id === currentTermId);
+  if (isTeacher && assignedSubjects.length === 0) {
+    return (
+      <div className={embedded ? "" : "p-6 md:p-8 max-w-4xl"}>
+        {!embedded && (
+          <h1 className="text-2xl font-semibold mb-6">Result entry</h1>
+        )}
+        <Card className="p-6 bg-amber-50 border-amber-200">
+          <div className="flex items-start gap-3">
+            <Lock className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+            <div>
+              <p className="text-sm font-medium text-amber-900">
+                No subjects assigned
+              </p>
+              <p className="text-sm text-amber-800 mt-1">
+                Your director hasn't assigned you any subjects to teach yet. Ask
+                them to add subjects from the Staff tab.
+              </p>
+            </div>
+          </div>
+        </Card>
+      </div>
+    );
+  }
+
   const selectedClass = classes.find((c) => c.id === classId);
   const selectedSubject = subjects.find((s) => s.id === subjectId);
 
   return (
-    <div className="p-6 md:p-8 max-w-7xl">
-      <div className="mb-6">
-        <h1 className="text-2xl font-semibold">Result entry</h1>
-        <p className="text-sm text-ink-soft mt-1">
-          {currentTerm && (
-            <>
-              Current term:{" "}
-              <strong>
-                {currentTerm.academicYear} — {currentTerm.name}
-              </strong>
-            </>
-          )}
-        </p>
-      </div>
+    <div className={embedded ? "" : "p-6 md:p-8 max-w-7xl"}>
+      {!embedded && (
+        <div className="mb-6">
+          <h1 className="text-2xl font-semibold">Result entry</h1>
+          <p className="text-sm text-ink-soft mt-1">
+            {activeTerm && (
+              <>
+                Current term:{" "}
+                <strong>
+                  {activeTerm.academicYear} — {activeTerm.name}
+                </strong>
+              </>
+            )}
+          </p>
+        </div>
+      )}
 
       <Card className="p-4 mb-6">
         <div className="grid md:grid-cols-2 gap-4">
@@ -311,7 +383,15 @@ export default function ResultsPage() {
             onChange={(e) => setSubjectId(e.target.value)}
             disabled={!classId}
           >
-            <option value="">— select —</option>
+            <option value="">
+              {!classId
+                ? "— pick a class first —"
+                : availableSubjects.length === 0
+                  ? isTeacher
+                    ? "— you don't teach any subjects in this class —"
+                    : "— no subjects for this class —"
+                  : "— select —"}
+            </option>
             {availableSubjects.map((s) => (
               <option key={s.id} value={s.id}>
                 {s.name}
@@ -319,6 +399,12 @@ export default function ResultsPage() {
             ))}
           </Select>
         </div>
+        {isTeacher && classId && availableSubjects.length === 0 && (
+          <p className="text-xs text-amber-700 mt-2">
+            You have no subjects assigned in this class. Ask your director if
+            this is a mistake.
+          </p>
+        )}
       </Card>
 
       {!classId || !subjectId ? (
@@ -408,6 +494,7 @@ export default function ResultsPage() {
                                 max={a.maxScore}
                                 step="0.5"
                                 value={val}
+                                disabled={readOnly}
                                 onChange={(e) =>
                                   setScore(
                                     s.id,
@@ -417,7 +504,7 @@ export default function ResultsPage() {
                                   )
                                 }
                                 placeholder="—"
-                                className={`w-16 rounded border px-1.5 py-1.5 text-center focus:outline-none focus:ring-2 focus:ring-brand-500 ${
+                                className={`w-16 rounded border px-1.5 py-1.5 text-center focus:outline-none focus:ring-2 focus:ring-brand-500 disabled:bg-slate-50 disabled:cursor-not-allowed ${
                                   isChanged
                                     ? "border-amber-400 bg-amber-50"
                                     : saved !== undefined
@@ -470,7 +557,7 @@ export default function ResultsPage() {
                 {savedMsg}
               </span>
             )}
-            <Button onClick={saveAll} disabled={saving}>
+            <Button onClick={saveAll} disabled={saving || readOnly}>
               <Save className="w-4 h-4" />{" "}
               {saving ? "Saving…" : "Save all scores"}
             </Button>
