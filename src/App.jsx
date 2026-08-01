@@ -3,6 +3,7 @@ import { SchoolProvider, useSchool } from "./contexts/SchoolContext";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
 import { Spinner } from "./components/ui";
 import Layout from "./components/Layout";
+import PromotionPage from "./pages/promotion/PromotionPage";
 
 // Main tenant + existing admin pages
 import Landing from "./pages/Landing";
@@ -64,9 +65,6 @@ function SchoolApp() {
 
   if (loading) return <Spinner label="Signing you in…" />;
 
-  // If a user is signed in but their profile hasn't loaded yet (e.g. a fresh
-  // signup where the API is still writing the doc), show a spinner. Do not
-  // treat "profile null" as "no permissions" — that leads to wrong redirects.
   const profileLoading = user && !profile;
   const isPending = profile?.status === "pending";
 
@@ -88,7 +86,7 @@ function SchoolApp() {
         }
       />
 
-      {/* Login — sends you to right place if already signed in */}
+      {/* Login */}
       <Route
         path="/login"
         element={
@@ -104,9 +102,7 @@ function SchoolApp() {
         }
       />
 
-      {/* Pending — the pending page itself handles the "still loading profile"
-          state internally, so we render it even if profile isn't loaded yet.
-          Only redirect AWAY if profile is loaded and confirmed not pending. */}
+      {/* Pending */}
       <Route
         path="/staff-pending"
         element={
@@ -248,6 +244,20 @@ function SchoolApp() {
             school={school}
           >
             <SettingsPage />
+          </AdminRoute>
+        }
+      />
+      {/* Promotion & Graduation — end of session flow */}
+      <Route
+        path="/promotion"
+        element={
+          <AdminRoute
+            user={user}
+            profile={profile}
+            profileLoading={profileLoading}
+            school={school}
+          >
+            <PromotionPage />
           </AdminRoute>
         }
       />
