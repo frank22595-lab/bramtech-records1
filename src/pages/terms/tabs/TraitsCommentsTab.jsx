@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from "react";
 import {
   collection,
   doc,
+  getDocs,
   onSnapshot,
   orderBy,
   query,
@@ -18,6 +19,8 @@ import {
   AlertCircle,
   Info,
   Lock,
+  Users,
+  Sparkles,
 } from "lucide-react";
 import {
   Button,
@@ -51,16 +54,6 @@ function clean(obj) {
   return out;
 }
 
-/**
- * TraitsCommentsTab
- *
- * Ownership:
- *   - Class teacher of the class: can edit psychomotor + affective + class teacher's comment
- *   - Director/admin: can edit everything (traits, both comments, adviser comment)
- *   - Subject-only teachers (e.g. Music teacher across 3 classes): read-only view
- *
- * Attendance is NO LONGER edited here — moved to dedicated Attendance tab.
- */
 export default function TraitsCommentsTab({ term, readOnly }) {
   const { db } = getFirebase();
   const { profile } = useAuth();
@@ -75,6 +68,7 @@ export default function TraitsCommentsTab({ term, readOnly }) {
   const [selectedStudentId, setSelectedStudentId] = useState(null);
   const [classTeacher, setClassTeacher] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [showBulkPanel, setShowBulkPanel] = useState(false);
 
   const cfg = school?.reportCardConfig || {};
   const psychomotorList = cfg.psychomotorSkills || cfg.skills || [];
@@ -102,7 +96,6 @@ export default function TraitsCommentsTab({ term, readOnly }) {
 
   useEffect(() => {
     if (isTeacher && !classId && classTeacherOf) {
-      // Pre-select the class they're class teacher of
       setClassId(classTeacherOf);
     } else if (isTeacher && !classId && visibleClasses.length === 1) {
       setClassId(visibleClasses[0].id);
@@ -162,8 +155,10 @@ export default function TraitsCommentsTab({ term, readOnly }) {
   const selectedIndex = students.findIndex((s) => s.id === selectedStudentId);
   const selectedClass = classes.find((c) => c.id === classId);
 
-  // Am I the class teacher of the selected class?
   const isClassTeacherOfSelected = isTeacher && classTeacherOf === classId;
+  const canBulkClassTeacher =
+    !readOnly && (isAdminOrDirector || isClassTeacherOfSelected);
+  const canBulkPrincipal = !readOnly && isAdminOrDirector;
 
   if (loading) return <Spinner />;
 
@@ -194,6 +189,7 @@ export default function TraitsCommentsTab({ term, readOnly }) {
           onChange={(e) => {
             setClassId(e.target.value);
             setSelectedStudentId(null);
+            setShowBulkPanel(false);
           }}
         >
           <option value="">— pick a class —</option>
@@ -228,6 +224,41 @@ export default function TraitsCommentsTab({ term, readOnly }) {
           <strong>Attendance</strong> tab, not here.
         </p>
       </Card>
+
+      {classId &&
+        students.length > 0 &&
+        (canBulkClassTeacher || canBulkPrincipal) && (
+          <div className="mb-4">
+            <button
+              onClick={() => setShowBulkPanel((v) => !v)}
+              className="w-full text-left p-3 border border-slate-200 rounded-lg bg-white hover:border-brand-400 flex items-center justify-between transition-colors"
+            >
+              <div className="flex items-center gap-2">
+                <Sparkles className="w-4 h-4 text-brand-600" />
+                <span className="text-sm font-medium">
+                  Bulk apply the same comment to whole class
+                </span>
+              </div>
+              <span className="text-xs text-ink-soft">
+                {showBulkPanel ? "Hide" : "Show"}
+              </span>
+            </button>
+            {showBulkPanel && (
+              <BulkCommentPanel
+                classId={classId}
+                className={selectedClass?.name || ""}
+                term={term}
+                students={students}
+                reportCards={reportCards}
+                classTeacher={classTeacher}
+                school={school}
+                profile={profile}
+                canBulkClassTeacher={canBulkClassTeacher}
+                canBulkPrincipal={canBulkPrincipal}
+              />
+            )}
+          </div>
+        )}
 
       {!classId ? (
         <Card className="p-12 text-center">
@@ -329,6 +360,173 @@ export default function TraitsCommentsTab({ term, readOnly }) {
   );
 }
 
+function BulkCommentPanel({
+  classId,
+  className,
+  term,
+  students,
+  reportCards,
+  classTeacher,
+  school,
+  profile,
+  canBulkClassTeacher,
+  canBulkPrincipal,
+}) {
+  const { db } = getFirebase();
+  const [teacherComment, setTeacherComment] = useState("");
+  const [principalComment, setPrincipalComment] = useState("");
+  const [applying, setApplying] = useState(false);
+  const [msg, setMsg] = useState("");
+
+  const applyBulk = async (kind) => {
+    const comment = (
+      kind === "teacher" ? teacherComment : principalComment
+    ).trim();
+    if (!comment) {
+      setMsg(`Please write a comment first.`);
+      return;
+    }
+
+    const withExisting = students.filter((s) => {
+      const rc = reportCards.find((r) => r.studentId === s.id);
+      return kind === "teacher"
+        ? !!rc?.classTeacherComment
+        : !!rc?.headTeacherComment;
+    });
+
+    const label =
+      kind === "teacher" ? "class teacher's comment" : "principal's comment";
+
+    let override = false;
+    if (withExisting.length > 0) {
+      const goOn = confirm(
+        `${withExisting.length} student${withExisting.length === 1 ? " already has" : "s already have"} a ${label}.\n\n` +
+          `Click OK to OVERWRITE all ${students.length} students with your new comment.\n` +
+          `Click Cancel to only apply to the ${students.length - withExisting.length} student${students.length - withExisting.length === 1 ? "" : "s"} without one.`,
+      );
+      override = goOn;
+    }
+
+    setApplying(true);
+    setMsg("");
+    try {
+      let updated = 0;
+      for (const student of students) {
+        const rc = reportCards.find((r) => r.studentId === student.id);
+        const existing =
+          kind === "teacher" ? rc?.classTeacherComment : rc?.headTeacherComment;
+        if (existing && !override) continue;
+
+        const reportId = `${student.id}_${term.id}`;
+        const payload = {
+          studentId: student.id,
+          studentName: student.fullName || "",
+          admissionNumber: student.admissionNumber || null,
+          classId,
+          className,
+          termId: term.id,
+          termName: term.name || "",
+          academicYear: term.academicYear || "",
+          status: rc?.status || "draft",
+          updatedAt: serverTimestamp(),
+        };
+        if (!rc) payload.createdAt = serverTimestamp();
+
+        if (kind === "teacher") {
+          payload.classTeacherComment = comment;
+          payload.classTeacherName = classTeacher?.fullName || null;
+        } else {
+          payload.headTeacherComment = comment;
+          payload.headTeacherName = school?.principalName || null;
+          payload.headTeacherTitle = school?.principalTitle || "Principal";
+        }
+
+        await setDoc(doc(db, "reportCards", reportId), clean(payload), {
+          merge: true,
+        });
+        updated++;
+      }
+      setMsg(`✓ Applied to ${updated} student${updated === 1 ? "" : "s"}`);
+      setTimeout(() => setMsg(""), 4000);
+    } catch (err) {
+      console.error("Bulk apply error:", err);
+      setMsg("Failed: " + err.message);
+    } finally {
+      setApplying(false);
+    }
+  };
+
+  return (
+    <Card className="p-4 mt-2 bg-slate-50 border-slate-200">
+      <div className="flex items-start gap-2 mb-3">
+        <Users className="w-4 h-4 text-slate-600 flex-shrink-0 mt-0.5" />
+        <p className="text-xs text-ink-soft">
+          Write a comment once and apply it to all{" "}
+          <strong>{students.length}</strong> students in{" "}
+          <strong>{className}</strong>. You can still override an individual
+          student below.
+        </p>
+      </div>
+
+      {canBulkClassTeacher && (
+        <div className="mb-4">
+          <label className="block text-xs font-semibold text-ink-soft uppercase tracking-wide mb-2">
+            Class teacher's comment
+          </label>
+          <textarea
+            value={teacherComment}
+            onChange={(e) => setTeacherComment(e.target.value)}
+            placeholder="e.g. Satisfactory progress this term. Keep it up."
+            rows={2}
+            className="w-full rounded border border-slate-300 px-3 py-2 text-sm bg-white"
+          />
+          <div className="flex justify-end mt-2">
+            <Button
+              variant="secondary"
+              onClick={() => applyBulk("teacher")}
+              disabled={applying || !teacherComment.trim()}
+            >
+              {applying ? "Applying…" : `Apply to all ${students.length}`}
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {canBulkPrincipal && (
+        <div>
+          <label className="block text-xs font-semibold text-ink-soft uppercase tracking-wide mb-2">
+            Principal's comment
+          </label>
+          <textarea
+            value={principalComment}
+            onChange={(e) => setPrincipalComment(e.target.value)}
+            placeholder="e.g. A satisfactory result. Well done."
+            rows={2}
+            className="w-full rounded border border-slate-300 px-3 py-2 text-sm bg-white"
+          />
+          <div className="flex justify-end mt-2">
+            <Button
+              variant="secondary"
+              onClick={() => applyBulk("principal")}
+              disabled={applying || !principalComment.trim()}
+            >
+              {applying ? "Applying…" : `Apply to all ${students.length}`}
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {msg && (
+        <div
+          className={`mt-3 text-sm ${msg.includes("Failed") || msg.includes("Please") ? "text-red-600" : "text-emerald-700"}`}
+        >
+          {msg}
+        </div>
+      )}
+    </Card>
+  );
+}
+
 function StudentEditor({
   student,
   classId,
@@ -400,9 +598,6 @@ function StudentEditor({
     setMsg("");
   }, [student.id]);
 
-  // Permissions:
-  //   - Traits + class teacher's comment: class teacher OR director
-  //   - Principal's comment + adviser: director only
   const canEditClassTeacherFields =
     !readOnly && (isAdminOrDirector || isClassTeacherOfSelected);
   const canEditPrincipalFields = !readOnly && isAdminOrDirector;
