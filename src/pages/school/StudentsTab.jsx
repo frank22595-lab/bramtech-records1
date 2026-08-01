@@ -6,10 +6,13 @@ import {
   doc,
   setDoc,
   updateDoc,
+  deleteDoc,
+  getDocs,
   serverTimestamp,
   orderBy,
+  where,
 } from "firebase/firestore";
-import { Plus, Search, User, X, Lock } from "lucide-react";
+import { Plus, Search, User, X, Lock, Trash2, KeyRound } from "lucide-react";
 import {
   Button,
   Card,
@@ -20,6 +23,7 @@ import {
 } from "../../components/ui";
 import ImageUpload from "../../components/ImageUpload";
 import StudentAccessCard from "../../components/students/StudentAccessCard";
+import BulkAccessCodesModal from "../../components/students/BulkAccessCodesModal";
 import { getFirebase } from "../../config/firebase";
 import { useAuth } from "../../contexts/AuthContext";
 import { useSchool } from "../../contexts/SchoolContext";
@@ -44,6 +48,7 @@ export default function StudentsTab() {
     classTeacherOf,
     canAccessClass,
     canManageStudentsIn,
+    has,
   } = usePermissions();
 
   const [classes, setClasses] = useState([]);
@@ -53,6 +58,7 @@ export default function StudentsTab() {
   const [showInactive, setShowInactive] = useState(false);
   const [search, setSearch] = useState("");
   const [editing, setEditing] = useState(null);
+  const [bulkCodesFor, setBulkCodesFor] = useState(null); // classId or null
 
   useEffect(() => {
     return onSnapshot(
@@ -77,20 +83,13 @@ export default function StudentsTab() {
     );
   }, [db]);
 
-  // Classes the current user is allowed to see
   const accessibleClasses = useMemo(() => {
     if (isAdminOrDirector) return classes;
-    // Teachers: only classes they're assigned to (or class teacher of)
     return classes.filter((c) => canAccessClass(c.id));
   }, [classes, isAdminOrDirector, assignedClasses, classTeacherOf]);
 
-  // Set the initial class filter to teacher's class if they only have one
   useEffect(() => {
-    if (
-      isTeacher &&
-      filterClassId === "all" &&
-      accessibleClasses.length === 1
-    ) {
+    if (isTeacher && filterClassId === "all" && accessibleClasses.length === 1) {
       setFilterClassId(accessibleClasses[0].id);
     }
   }, [isTeacher, accessibleClasses, filterClassId]);
@@ -98,9 +97,7 @@ export default function StudentsTab() {
   const filtered = useMemo(() => {
     const term = search.toLowerCase().trim();
     return students.filter((s) => {
-      // Permission check first — teachers only see students in their classes
       if (!isAdminOrDirector && !canAccessClass(s.classId)) return false;
-
       if (!showInactive && s.active === false) return false;
       if (filterClassId !== "all" && s.classId !== filterClassId) return false;
       if (
@@ -111,19 +108,23 @@ export default function StudentsTab() {
         return false;
       return true;
     });
-  }, [
-    students,
-    filterClassId,
-    showInactive,
-    search,
-    isAdminOrDirector,
-    assignedClasses,
-    classTeacherOf,
-  ]);
+  }, [students, filterClassId, showInactive, search, isAdminOrDirector, assignedClasses, classTeacherOf]);
 
   const activeCount = filtered.filter((s) => s.active !== false).length;
-
   const canAddStudent = isAdminOrDirector || accessibleClasses.length > 0;
+  const canBulkCodes = isAdminOrDirector || has("generateAccessCodes");
+
+  const openBulkCodes = () => {
+    if (filterClassId === "all") {
+      if (accessibleClasses.length === 1) {
+        setBulkCodesFor(accessibleClasses[0].id);
+      } else {
+        alert("Pick a class first, then click Bulk codes.");
+      }
+    } else {
+      setBulkCodesFor(filterClassId);
+    }
+  };
 
   return (
     <div>
@@ -133,17 +134,23 @@ export default function StudentsTab() {
             {activeCount} active student{activeCount === 1 ? "" : "s"}
             {isTeacher && (
               <span className="text-ink-soft/70">
-                {" "}
-                (in your {accessibleClasses.length === 1 ? "class" : "classes"})
+                {" "}(in your {accessibleClasses.length === 1 ? "class" : "classes"})
               </span>
             )}
           </p>
         </div>
-        {canAddStudent && (
-          <Button onClick={() => setEditing({})}>
-            <Plus className="w-4 h-4" /> Add student
-          </Button>
-        )}
+        <div className="flex gap-2 flex-wrap">
+          {canBulkCodes && filtered.length > 0 && (
+            <Button variant="secondary" onClick={openBulkCodes}>
+              <KeyRound className="w-4 h-4" /> Bulk codes
+            </Button>
+          )}
+          {canAddStudent && (
+            <Button onClick={() => setEditing({})}>
+              <Plus className="w-4 h-4" /> Add student
+            </Button>
+          )}
+        </div>
       </div>
 
       {isTeacher && accessibleClasses.length === 0 && (
@@ -151,13 +158,9 @@ export default function StudentsTab() {
           <div className="flex items-start gap-3">
             <Lock className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
             <div>
-              <p className="text-sm font-medium text-amber-900">
-                No classes assigned yet
-              </p>
+              <p className="text-sm font-medium text-amber-900">No classes assigned yet</p>
               <p className="text-sm text-amber-800 mt-1">
-                Your director hasn't assigned you to any classes yet. Ask them
-                to assign you a class from the Staff tab so you can start
-                managing students.
+                Your director hasn't assigned you to any classes yet. Ask them to assign you a class from the Staff tab so you can start managing students.
               </p>
             </div>
           </div>
@@ -174,15 +177,10 @@ export default function StudentsTab() {
             className="w-full rounded-lg border border-slate-300 pl-10 pr-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
           />
         </div>
-        <Select
-          value={filterClassId}
-          onChange={(e) => setFilterClassId(e.target.value)}
-        >
+        <Select value={filterClassId} onChange={(e) => setFilterClassId(e.target.value)}>
           <option value="all">All classes</option>
           {accessibleClasses.map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.name}
-            </option>
+            <option key={c.id} value={c.id}>{c.name}</option>
           ))}
         </Select>
         <label className="flex items-center gap-2 text-sm px-3 py-2.5 whitespace-nowrap">
@@ -225,7 +223,16 @@ export default function StudentsTab() {
         <StudentModal
           student={editing.id ? editing : null}
           classes={accessibleClasses}
+          allStudents={students}
           onClose={() => setEditing(null)}
+        />
+      )}
+
+      {bulkCodesFor && (
+        <BulkAccessCodesModal
+          classId={bulkCodesFor}
+          classes={classes}
+          onClose={() => setBulkCodesFor(null)}
         />
       )}
     </div>
@@ -260,9 +267,7 @@ function StudentRow({ student, classes, canEdit, onEdit }) {
         </div>
       </div>
       {student.active === false && <Badge tone="warning">Inactive</Badge>}
-      {!canEdit && (
-        <Lock className="w-3.5 h-3.5 text-slate-400" title="Read-only" />
-      )}
+      {!canEdit && <Lock className="w-3.5 h-3.5 text-slate-400" title="Read-only" />}
     </Card>
   );
 }
@@ -296,20 +301,22 @@ function Avatar({ photoUrl, name, size = 40 }) {
   );
 }
 
-function StudentModal({ student, classes, onClose }) {
+function StudentModal({ student, classes, allStudents, onClose }) {
   const { db } = getFirebase();
   const { profile } = useAuth();
   const { school } = useSchool();
-  const { isTeacher, classTeacherOf } = usePermissions();
+  const { isAdminOrDirector, classTeacherOf } = usePermissions();
   const isEdit = !!student;
   const cloudinaryReady = isCloudinaryConfigured();
   const [suggestedAdmission, setSuggestedAdmission] = useState("");
+  const [useCustomAdmission, setUseCustomAdmission] = useState(
+    isEdit && !!student?.admissionNumber
+  );
   const [form, setForm] = useState(
     () =>
       student || {
         fullName: "",
         admissionNumber: "",
-        // For teachers: pre-fill with their class teacher class, or first assigned
         classId: classTeacherOf || classes[0]?.id || "",
         gender: "male",
         dateOfBirth: "",
@@ -323,6 +330,7 @@ function StudentModal({ student, classes, onClose }) {
       },
   );
   const [busy, setBusy] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -331,15 +339,20 @@ function StudentModal({ student, classes, onClose }) {
       previewNextAdmissionNumber(acronym)
         .then(setSuggestedAdmission)
         .catch((err) =>
-          console.warn(
-            "[StudentModal] Could not preview admission number:",
-            err,
-          ),
+          console.warn("[StudentModal] Could not preview admission number:", err)
         );
     }
   }, [isEdit, school]);
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+
+  const checkAdmissionUnique = (admissionNumber) => {
+    if (!admissionNumber) return true;
+    const others = allStudents.filter(s => s.id !== student?.id);
+    return !others.some(s =>
+      (s.admissionNumber || "").toLowerCase() === admissionNumber.toLowerCase()
+    );
+  };
 
   const save = async () => {
     setError("");
@@ -351,27 +364,27 @@ function StudentModal({ student, classes, onClose }) {
       setError("Please select a class");
       return;
     }
+    if (useCustomAdmission && !form.admissionNumber.trim()) {
+      setError("Please enter a custom admission number, or uncheck the box to auto-generate");
+      return;
+    }
+    if (useCustomAdmission && !checkAdmissionUnique(form.admissionNumber.trim())) {
+      setError(`Admission number "${form.admissionNumber.trim()}" is already used by another student`);
+      return;
+    }
+
     setBusy(true);
     try {
-      const studentId =
-        student?.id ||
-        `stu_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+      const studentId = student?.id || `stu_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
       const selectedClass = classes.find((c) => c.id === form.classId);
 
-      let admissionNumber = (form.admissionNumber || "").trim();
+      let admissionNumber = useCustomAdmission ? (form.admissionNumber || "").trim() : "";
       let extraFields = {};
 
       if (!isEdit) {
         if (!admissionNumber) {
-          admissionNumber = await generateAdmissionNumber(
-            school?.shortName || "STU",
-          );
-          console.log(
-            "[StudentModal] Auto-generated admission number:",
-            admissionNumber,
-          );
+          admissionNumber = await generateAdmissionNumber(school?.shortName || "STU");
         }
-
         const accessCode = generateAccessCode();
         const accessCodeHash = await hashAccessCode(accessCode);
         extraFields = {
@@ -379,7 +392,9 @@ function StudentModal({ student, classes, onClose }) {
           accessCodeHash,
           accessCodeGeneratedAt: serverTimestamp(),
         };
-        console.log("[StudentModal] Generated access code for new student");
+      } else if (!useCustomAdmission) {
+        // In edit mode, if they turn off custom, keep the existing admission
+        admissionNumber = student?.admissionNumber || "";
       }
 
       const payload = {
@@ -417,6 +432,54 @@ function StudentModal({ student, classes, onClose }) {
     }
   };
 
+  const handleDelete = async () => {
+    if (!isEdit || !student?.id) return;
+    setDeleting(true);
+    setError("");
+    try {
+      // Check if student has any results or report cards
+      const [resultsSnap, reportCardsSnap] = await Promise.all([
+        getDocs(query(collection(db, "results"), where("studentId", "==", student.id))),
+        getDocs(query(collection(db, "reportCards"), where("studentId", "==", student.id))),
+      ]);
+
+      const hasResults = !resultsSnap.empty;
+      const hasReports = !reportCardsSnap.empty;
+
+      if (!hasResults && !hasReports) {
+        // Hard delete — no data attached
+        if (!confirm(`Delete ${student.fullName} completely? This CANNOT be undone.\n\nThe student has no scores or report cards yet, so no data will be lost.`)) {
+          setDeleting(false);
+          return;
+        }
+        await deleteDoc(doc(db, "students", student.id));
+      } else {
+        // Soft delete — data exists
+        const bits = [];
+        if (hasResults) bits.push(`${resultsSnap.size} score entries`);
+        if (hasReports) bits.push(`${reportCardsSnap.size} report card${reportCardsSnap.size === 1 ? '' : 's'}`);
+        if (!confirm(`${student.fullName} has ${bits.join(' and ')}. Deleting completely is not safe.\n\nMark them INACTIVE instead? (They'll disappear from active lists but their data is preserved.)`)) {
+          setDeleting(false);
+          return;
+        }
+        await updateDoc(doc(db, "students", student.id), {
+          active: false,
+          deactivatedAt: serverTimestamp(),
+          deactivatedBy: profile?.id || null,
+          updatedAt: serverTimestamp(),
+        });
+      }
+      onClose();
+    } catch (err) {
+      setError("Delete failed: " + err.message);
+      setDeleting(false);
+    }
+  };
+
+  const displayedAdmission = isEdit
+    ? (form.admissionNumber || "—")
+    : (useCustomAdmission ? "custom" : (suggestedAdmission || "auto-generated on save"));
+
   return (
     <div
       className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50"
@@ -426,14 +489,11 @@ function StudentModal({ student, classes, onClose }) {
         className="max-w-2xl w-full max-h-[90vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="p-6 border-b border-slate-200 flex items-center justify-between">
+        <div className="p-6 border-b border-slate-200 flex items-center justify-between sticky top-0 bg-white z-10">
           <h2 className="text-xl font-semibold">
             {isEdit ? "Edit student" : "Add student"}
           </h2>
-          <button
-            onClick={onClose}
-            className="p-1.5 rounded hover:bg-slate-100"
-          >
+          <button onClick={onClose} className="p-1.5 rounded hover:bg-slate-100">
             <X className="w-5 h-5" />
           </button>
         </div>
@@ -463,22 +523,34 @@ function StudentModal({ student, classes, onClose }) {
           />
           <div className="grid md:grid-cols-2 gap-4">
             <div>
-              <Input
-                label="Admission number"
-                placeholder={
-                  suggestedAdmission || (isEdit ? "" : "auto-generated on save")
-                }
-                value={form.admissionNumber}
-                onChange={(e) => set("admissionNumber", e.target.value)}
-              />
-              {!isEdit && suggestedAdmission && !form.admissionNumber && (
-                <p className="text-xs text-ink-soft mt-1">
-                  Will be assigned:{" "}
-                  <span className="font-mono font-medium">
-                    {suggestedAdmission}
-                  </span>
-                </p>
+              <label className="text-sm font-medium block mb-1">Admission number</label>
+              {!useCustomAdmission ? (
+                <div className="px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-lg text-sm text-slate-700">
+                  {isEdit ? (
+                    <span className="font-mono">{form.admissionNumber || '—'}</span>
+                  ) : (
+                    <>
+                      <span className="text-slate-500">Will assign: </span>
+                      <span className="font-mono font-medium">{suggestedAdmission || 'auto-generated'}</span>
+                    </>
+                  )}
+                </div>
+              ) : (
+                <Input
+                  placeholder="e.g. YKI/2026/047"
+                  value={form.admissionNumber}
+                  onChange={(e) => set("admissionNumber", e.target.value)}
+                />
               )}
+              <label className="flex items-center gap-2 mt-2 text-xs text-ink-soft">
+                <input
+                  type="checkbox"
+                  checked={useCustomAdmission}
+                  onChange={(e) => setUseCustomAdmission(e.target.checked)}
+                  className="w-3.5 h-3.5 accent-brand-600"
+                />
+                Use a custom admission number instead
+              </label>
             </div>
             <Select
               label="Class"
@@ -487,17 +559,10 @@ function StudentModal({ student, classes, onClose }) {
             >
               <option value="">— select —</option>
               {classes.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
+                <option key={c.id} value={c.id}>{c.name}</option>
               ))}
             </Select>
           </div>
-          {isTeacher && (
-            <p className="text-xs text-ink-soft -mt-2">
-              You can only add students to classes you're assigned to.
-            </p>
-          )}
           <div className="grid md:grid-cols-2 gap-4">
             <Select
               label="Gender"
@@ -578,13 +643,27 @@ function StudentModal({ student, classes, onClose }) {
             </div>
           )}
         </div>
-        <div className="p-6 border-t border-slate-200 flex justify-end gap-2">
-          <Button variant="secondary" onClick={onClose} disabled={busy}>
-            Cancel
-          </Button>
-          <Button onClick={save} disabled={busy}>
-            {busy ? "Saving…" : isEdit ? "Save changes" : "Add student"}
-          </Button>
+        <div className="p-6 border-t border-slate-200 flex justify-between items-center gap-2 flex-wrap sticky bottom-0 bg-white">
+          <div>
+            {isEdit && isAdminOrDirector && (
+              <Button
+                variant="secondary"
+                onClick={handleDelete}
+                disabled={deleting || busy}
+                className="!text-red-700 !border-red-200 hover:!bg-red-50"
+              >
+                <Trash2 className="w-4 h-4" /> {deleting ? "Deleting…" : "Delete"}
+              </Button>
+            )}
+          </div>
+          <div className="flex gap-2">
+            <Button variant="secondary" onClick={onClose} disabled={busy || deleting}>
+              Cancel
+            </Button>
+            <Button onClick={save} disabled={busy || deleting}>
+              {busy ? "Saving…" : isEdit ? "Save changes" : "Add student"}
+            </Button>
+          </div>
         </div>
       </Card>
     </div>
