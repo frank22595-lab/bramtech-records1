@@ -1,13 +1,4 @@
 {
-  "_comment": "Maps subdomain slug -> Firebase config for that school's isolated project. Add a new school by creating a Firebase project and pasting its config here.",
-  "demo": {
-    "apiKey": "AIzaSyDV7thsPlyG3NwiYUIwM_g2N7kuhzKnfQQ",
-    "authDomain": "bramresult.firebaseapp.com",
-    "projectId": "bramresult",
-    "storageBucket": "bramresult.firebasestorage.app",
-    "messagingSenderId": "506330386642",
-    "appId": "1:506330386642:web:b4a1565186d65f3d6f9d0b"
-  },
   "yourkidsni": {
     "apiKey": "AIzaSyDV7thsPlyG3NwiYUIwM_g2N7kuhzKnfQQ",
     "authDomain": "bramresult.firebaseapp.com",
