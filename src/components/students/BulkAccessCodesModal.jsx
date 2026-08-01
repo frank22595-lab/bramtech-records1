@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import {
   collection,
   doc,
@@ -15,33 +15,52 @@ import {
   RefreshCw,
   Loader2,
   CheckCircle2,
+  ChevronLeft,
 } from "lucide-react";
-import { Card, Button } from "../ui";
+import { Card, Button, Select } from "../ui";
 import { getFirebase } from "../../config/firebase";
 import { useSchool } from "../../contexts/SchoolContext";
+import { usePermissions } from "../../hooks/usePermissions";
 import { generateAccessCode, hashAccessCode } from "../../lib/accessCode";
 
 /**
  * Bulk access codes modal.
  *
- * Director/teacher (with permission) picks a class → sees all students →
- * can generate/regenerate codes and open a per-parent WhatsApp message.
+ * If opened without a specific class (from the "all classes" view), starts
+ * on a class-picker step. User picks the class → then sees the students.
  *
- * "One message per parent" — each parent gets a personalized WhatsApp with
- * only their own child's code.
+ * If opened with a class already selected (a class is in the filter),
+ * skips the picker and goes straight to the students list.
  */
-export default function BulkAccessCodesModal({ classId, classes, onClose }) {
+export default function BulkAccessCodesModal({
+  classId: initialClassId,
+  classes,
+  onClose,
+}) {
   const { db } = getFirebase();
   const { school } = useSchool();
+  const { isAdminOrDirector, canAccessClass } = usePermissions();
+
+  const [classId, setClassId] = useState(initialClassId || "");
   const [students, setStudents] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState({});
   const [copied, setCopied] = useState({});
+
+  const accessibleClasses = useMemo(() => {
+    const active = classes.filter((c) => c.active !== false);
+    if (isAdminOrDirector) return active;
+    return active.filter((c) => canAccessClass(c.id));
+  }, [classes, isAdminOrDirector]);
 
   const selectedClass = classes.find((c) => c.id === classId);
 
   useEffect(() => {
-    if (!classId) return;
+    if (!classId) {
+      setStudents([]);
+      return;
+    }
+    setLoading(true);
     return onSnapshot(
       query(
         collection(db, "students"),
@@ -119,7 +138,6 @@ export default function BulkAccessCodesModal({ classId, classes, onClose }) {
     }
 
     let phone = student.parentPhone.replace(/[^0-9]/g, "");
-    // Normalize Nigerian numbers
     if (phone.startsWith("0")) phone = "234" + phone.slice(1);
     else if (!phone.startsWith("234") && phone.length <= 10)
       phone = "234" + phone;
@@ -161,6 +179,54 @@ Please keep this code safe. Thank you!`;
     (s) => s.accessCode && s.parentPhone,
   ).length;
 
+  // Step 1 — pick a class (if none was passed in)
+  if (!classId) {
+    return (
+      <div
+        className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50"
+        onClick={onClose}
+      >
+        <Card className="max-w-md w-full" onClick={(e) => e.stopPropagation()}>
+          <div className="p-5 border-b border-slate-200 flex items-start justify-between gap-3">
+            <div>
+              <h2 className="text-lg font-semibold">Bulk access codes</h2>
+              <p className="text-xs text-ink-soft mt-1">
+                Pick a class to manage codes for.
+              </p>
+            </div>
+            <button
+              onClick={onClose}
+              className="p-1.5 rounded hover:bg-slate-100"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+          <div className="p-5 space-y-3">
+            {accessibleClasses.length === 0 ? (
+              <p className="text-sm text-ink-soft">No classes available.</p>
+            ) : (
+              accessibleClasses.map((c) => (
+                <button
+                  key={c.id}
+                  onClick={() => setClassId(c.id)}
+                  className="w-full text-left px-4 py-3 border border-slate-200 rounded-lg hover:border-brand-500 hover:bg-brand-50 transition-colors"
+                >
+                  <div className="font-medium">{c.name}</div>
+                </button>
+              ))
+            )}
+          </div>
+          <div className="p-4 border-t border-slate-200 flex justify-end">
+            <Button variant="secondary" onClick={onClose}>
+              Cancel
+            </Button>
+          </div>
+        </Card>
+      </div>
+    );
+  }
+
+  // Step 2 — manage codes for selected class
   return (
     <div
       className="fixed inset-0 bg-black/50 flex items-start md:items-center justify-center p-4 z-50 overflow-y-auto"
@@ -172,9 +238,20 @@ Please keep this code safe. Thank you!`;
       >
         <div className="p-5 border-b border-slate-200 flex items-start justify-between gap-3 sticky top-0 bg-white z-10">
           <div className="min-w-0 flex-1">
-            <h2 className="text-lg font-semibold truncate">
-              Access codes — {selectedClass?.name}
-            </h2>
+            <div className="flex items-center gap-2">
+              {!initialClassId && (
+                <button
+                  onClick={() => setClassId("")}
+                  className="p-1 rounded hover:bg-slate-100 text-slate-500"
+                  title="Pick another class"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                </button>
+              )}
+              <h2 className="text-lg font-semibold truncate">
+                Access codes — {selectedClass?.name}
+              </h2>
+            </div>
             <p className="text-xs text-ink-soft mt-1">
               {students.length} students · {missingCodes} without codes ·{" "}
               {readyToSend} ready to WhatsApp
