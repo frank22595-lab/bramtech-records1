@@ -19,7 +19,6 @@ import {
   Building2,
   GraduationCap,
   ListChecks,
-  Star,
   GripVertical,
   Download,
   Loader2,
@@ -33,7 +32,6 @@ import { getFirebase } from "../../config/firebase";
 import { useSchool } from "../../contexts/SchoolContext";
 import { usePermissions } from "../../hooks/usePermissions";
 import { getSchoolSlug } from "../../config/schoolRegistry";
-import DemoDataPanel from "../../components/DemoDataPanel";
 import SchoolBrandingSection from "../../components/SchoolBrandingSection";
 
 const TABS = [
@@ -41,7 +39,6 @@ const TABS = [
   { id: "grades", label: "Grade scale", icon: GraduationCap },
   { id: "assessments", label: "Assessments", icon: ListChecks },
   { id: "backup", label: "Backup", icon: Database },
-  { id: "demo", label: "Demo data", icon: Star },
 ];
 
 export default function SettingsPage() {
@@ -72,7 +69,6 @@ export default function SettingsPage() {
       {activeTab === "grades" && <GradesTab />}
       {activeTab === "assessments" && <AssessmentsTab />}
       {activeTab === "backup" && <BackupTab />}
-      {activeTab === "demo" && <DemoDataPanel />}
     </div>
   );
 }
