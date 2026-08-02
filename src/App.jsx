@@ -5,7 +5,7 @@ import { Spinner } from "./components/ui";
 import Layout from "./components/Layout";
 import PromotionPage from "./pages/promotion/PromotionPage";
 
-// Main tenant + existing admin pages
+// Main tenant pages
 import Landing from "./pages/Landing";
 import Signup from "./pages/Signup";
 import Login from "./pages/Login";
@@ -19,14 +19,7 @@ import ReportsBrowsePage from "./pages/reports/ReportsBrowsePage";
 import ReportDesignPage from "./pages/reports/ReportDesignPage";
 import SettingsPage from "./pages/settings/SettingsPage";
 
-// Public school website
-import HomePage from "./pages/site/HomePage";
-import ProgramsPage from "./pages/site/ProgramsPage";
-import AboutPage from "./pages/site/AboutPage";
-import EventsPage from "./pages/site/EventsPage";
-import ContactPage from "./pages/site/ContactPage";
-
-// Parent result checker portal
+// Parent result checker (public)
 import CheckResultPage from "./pages/public/CheckResultPage";
 
 // Staff signup + pending
@@ -70,15 +63,13 @@ function SchoolApp() {
 
   return (
     <Routes>
-      {/* ─── PUBLIC — no login required ─── */}
-      <Route path="/" element={<HomePage />} />
-      <Route path="/programs" element={<ProgramsPage />} />
-      <Route path="/about" element={<AboutPage />} />
-      <Route path="/events" element={<EventsPage />} />
-      <Route path="/contact" element={<ContactPage />} />
+      {/* Root — parents land straight on result checker */}
+      <Route path="/" element={<Navigate to="/check-result" replace />} />
+
+      {/* Public parent result checker */}
       <Route path="/check-result" element={<CheckResultPage />} />
 
-      {/* Staff signup — public but redirects if already signed in */}
+      {/* Staff signup */}
       <Route
         path="/staff-join"
         element={
@@ -116,7 +107,7 @@ function SchoolApp() {
         }
       />
 
-      {/* ─── ADMIN — login required + profile required ─── */}
+      {/* Admin */}
       <Route
         path="/dashboard"
         element={
@@ -247,7 +238,6 @@ function SchoolApp() {
           </AdminRoute>
         }
       />
-      {/* Promotion & Graduation — end of session flow */}
       <Route
         path="/promotion"
         element={
@@ -272,7 +262,7 @@ function SchoolApp() {
         }
       />
 
-      <Route path="*" element={<Navigate to="/" replace />} />
+      <Route path="*" element={<Navigate to="/check-result" replace />} />
     </Routes>
   );
 }
