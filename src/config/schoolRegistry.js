@@ -5,14 +5,13 @@
  * this returns the Firebase config for THAT school's isolated project.
  *
  * How it works:
- *  1. We parse the subdomain from window.location.hostname
- *  2. We fetch a public JSON registry that maps subdomain -> firebase config
- *  3. If we're on the main domain (no subdomain), we return null - that means
- *     "you're on the public/marketing site, don't init Firebase for a specific school yet"
+ *  1. If URL has ?school=X, use X (and remember it in localStorage)
+ *  2. Otherwise, parse the subdomain from window.location.hostname
+ *  3. If neither exists, fall back to localStorage from a previous visit
+ *     (this is what makes refresh work when the URL doesn't have ?school=)
+ *  4. If nothing, return null — treat as public/marketing site
  *
- * The registry is a single JSON file hosted on Vercel at /schools.json.
- * To add a new school: create their Firebase project, then add an entry here.
- * No code changes, no redeploy needed if the JSON is hosted separately.
+ * The registry itself is a JSON file at /schools.json (served from public/).
  */
 
 const MAIN_DOMAINS = new Set([
@@ -24,7 +23,8 @@ const MAIN_DOMAINS = new Set([
   "127.0.0.1",
 ]);
 
-const REGISTRY_URL = "/schools.json"; // served from /public/schools.json
+const REGISTRY_URL = "/schools.json";
+const SLUG_STORAGE_KEY = "bramtech-records-active-slug";
 
 let cachedRegistry = null;
 
@@ -41,36 +41,71 @@ async function loadRegistry() {
   }
 }
 
+// Remember which school this browser is currently viewing.
+// Read on refresh so we don't lose our place when the ?school= param
+// isn't in the URL any more (e.g. after navigating to /dashboard).
+function saveStoredSlug(slug) {
+  try {
+    if (slug) localStorage.setItem(SLUG_STORAGE_KEY, slug);
+  } catch {}
+}
+
+function loadStoredSlug() {
+  try {
+    return localStorage.getItem(SLUG_STORAGE_KEY) || null;
+  } catch {
+    return null;
+  }
+}
+
 /**
- * Extract subdomain slug from a hostname.
- * "deltacollege.records.bramtechsuite.com" -> "deltacollege"
- * "records.bramtechsuite.com" -> null (main domain)
- * "localhost" -> null (main domain during local dev, UNLESS ?school= override is set)
+ * Clear the stored slug. Call this on logout, or from a "switch school"
+ * flow if you ever add one.
+ */
+export function clearStoredSlug() {
+  try {
+    localStorage.removeItem(SLUG_STORAGE_KEY);
+  } catch {}
+}
+
+/**
+ * Figure out which school this browser session should load.
+ * Priority: URL param → hostname subdomain → localStorage → null.
  */
 export function getSchoolSlug(hostname = window.location.hostname) {
-  // Check for local dev override FIRST, before anything else.
-  // e.g. http://localhost:5173?school=demo forces us to act as the "demo" school.
+  // 1. URL param wins (e.g. ?school=yourkidsni). Save it for next refresh.
   const params = new URLSearchParams(window.location.search);
   const override = params.get("school");
-  if (override) return override;
+  if (override) {
+    saveStoredSlug(override);
+    return override;
+  }
 
-  if (MAIN_DOMAINS.has(hostname)) return null;
-
-  // Parse subdomain from records.bramtechsuite.com or bramtechrecords.com
+  // 2. Subdomain — the "proper" long-term way
   if (hostname.endsWith(".records.bramtechsuite.com")) {
-    return hostname.split(".")[0];
+    const slug = hostname.split(".")[0];
+    saveStoredSlug(slug);
+    return slug;
   }
   if (hostname.endsWith(".bramtechrecords.com")) {
-    return hostname.split(".")[0];
+    const slug = hostname.split(".")[0];
+    saveStoredSlug(slug);
+    return slug;
   }
 
-  // Unknown host - treat as main
+  // 3. localStorage fallback — this is what fixes the refresh bug.
+  //    When the URL is /dashboard (no ?school=) after login, we still know
+  //    which school we were on from the initial page load.
+  const stored = loadStoredSlug();
+  if (stored) return stored;
+
+  // 4. Nothing — treat as public/marketing landing
   return null;
 }
 
 /**
  * Resolve a school slug to its Firebase config.
- * Returns null if the school isn't registered (caller should show a friendly error).
+ * Returns null if the school isn't registered.
  */
 export async function getSchoolConfig(slug) {
   if (!slug) return null;
