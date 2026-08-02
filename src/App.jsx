@@ -22,6 +22,9 @@ import SettingsPage from "./pages/settings/SettingsPage";
 // Parent result checker (public)
 import CheckResultPage from "./pages/public/CheckResultPage";
 
+import TermsOfServicePage from "./pages/public/TermsOfServicePage";
+import PrivacyPolicyPage from "./pages/public/PrivacyPolicyPage";
+
 // Staff signup + pending
 import StaffJoinPage from "./pages/staff/StaffJoinPage";
 import StaffPendingPage from "./pages/staff/StaffPendingPage";
@@ -68,6 +71,9 @@ function SchoolApp() {
 
       {/* Public parent result checker */}
       <Route path="/check-result" element={<CheckResultPage />} />
+
+      <Route path="/terms" element={<TermsOfServicePage />} />
+      <Route path="/privacy" element={<PrivacyPolicyPage />} />
 
       {/* Staff signup */}
       <Route

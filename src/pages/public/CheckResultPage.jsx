@@ -387,8 +387,19 @@ export default function CheckResultPage() {
             </div>
           )}
 
-          <div className="mt-8 flex items-center justify-center gap-1.5 text-xs text-ink-soft">
-            <Shield className="w-3 h-3" /> Saved on this device only
+          <div className="mt-8 text-xs text-center text-ink-soft space-y-2">
+            <div className="flex items-center justify-center gap-1.5">
+              <Shield className="w-3 h-3" /> Saved on this device only
+            </div>
+            <div>
+              <a href="/terms" className="hover:underline">
+                Terms of Service
+              </a>
+              {" · "}
+              <a href="/privacy" className="hover:underline">
+                Privacy Policy
+              </a>
+            </div>
           </div>
         </div>
       </div>
@@ -503,6 +514,16 @@ export default function CheckResultPage() {
         <p className="text-xs text-center text-ink-soft mt-6">
           Contact your school if you don't have the access code.
         </p>
+
+        <div className="mt-4 text-xs text-center text-ink-soft">
+          <a href="/terms" className="hover:underline">
+            Terms of Service
+          </a>
+          {" · "}
+          <a href="/privacy" className="hover:underline">
+            Privacy Policy
+          </a>
+        </div>
       </div>
     </div>
   );
