@@ -10,6 +10,7 @@ import {
   orderBy,
   setDoc,
   writeBatch,
+  getDocs,
 } from "firebase/firestore";
 import {
   Save,
@@ -20,11 +21,18 @@ import {
   ListChecks,
   Star,
   GripVertical,
+  Download,
+  Loader2,
+  Shield,
+  Calendar,
+  Database,
 } from "lucide-react";
 import { Button, Card, Input, Select, Spinner } from "../../components/ui";
 import { TabBar } from "../../components/Layout";
 import { getFirebase } from "../../config/firebase";
 import { useSchool } from "../../contexts/SchoolContext";
+import { usePermissions } from "../../hooks/usePermissions";
+import { getSchoolSlug } from "../../config/schoolRegistry";
 import DemoDataPanel from "../../components/DemoDataPanel";
 import SchoolBrandingSection from "../../components/SchoolBrandingSection";
 
@@ -32,6 +40,7 @@ const TABS = [
   { id: "school", label: "School", icon: Building2 },
   { id: "grades", label: "Grade scale", icon: GraduationCap },
   { id: "assessments", label: "Assessments", icon: ListChecks },
+  { id: "backup", label: "Backup", icon: Database },
   { id: "demo", label: "Demo data", icon: Star },
 ];
 
@@ -62,6 +71,7 @@ export default function SettingsPage() {
       {activeTab === "school" && <SchoolTab />}
       {activeTab === "grades" && <GradesTab />}
       {activeTab === "assessments" && <AssessmentsTab />}
+      {activeTab === "backup" && <BackupTab />}
       {activeTab === "demo" && <DemoDataPanel />}
     </div>
   );
@@ -469,6 +479,284 @@ function AssessmentsTab() {
         </p>
       )}
     </Card>
+  );
+}
+
+// ========================================================================
+//  BACKUP TAB
+// ========================================================================
+// Downloads all Firestore data as a single JSON file. The director saves it
+// wherever they want (Google Drive, laptop, USB, etc.).
+//
+// Format: { exportedAt, schoolName, schoolSlug, version, collections: {...} }
+// Timestamps are converted to ISO strings for portability.
+
+function BackupTab() {
+  const { db } = getFirebase();
+  const { school } = useSchool();
+  const { isAdminOrDirector } = usePermissions();
+  const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState("");
+  const [msg, setMsg] = useState("");
+  const [lastLocal, setLastLocal] = useState(null);
+
+  // Read the "last backup" timestamp from localStorage as a client-side hint
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem("bramtech-last-backup");
+      if (raw) setLastLocal(new Date(raw));
+    } catch {}
+  }, []);
+
+  // Collections to include in the backup
+  const COLLECTIONS = [
+    "school",
+    "users",
+    "classes",
+    "subjects",
+    "assessments",
+    "terms",
+    "students",
+    "results",
+    "reportCards",
+  ];
+
+  // Firestore Timestamp objects don't serialize with default JSON.stringify.
+  // This replacer converts them to readable ISO strings.
+  const jsonReplacer = (key, value) => {
+    if (
+      value &&
+      typeof value === "object" &&
+      typeof value.seconds === "number" &&
+      typeof value.nanoseconds === "number"
+    ) {
+      return new Date(value.seconds * 1000).toISOString();
+    }
+    return value;
+  };
+
+  const runBackup = async () => {
+    if (!isAdminOrDirector) {
+      setMsg("Only directors can download backups.");
+      return;
+    }
+
+    setBusy(true);
+    setMsg("");
+    setProgress("Preparing…");
+
+    try {
+      const data = {
+        exportedAt: new Date().toISOString(),
+        schoolName: school?.name || "",
+        schoolSlug: getSchoolSlug() || "",
+        version: "1.0",
+        collections: {},
+      };
+
+      for (const name of COLLECTIONS) {
+        setProgress(`Backing up ${name}…`);
+        const snap = await getDocs(collection(db, name));
+        data.collections[name] = snap.docs.map((d) => ({
+          _id: d.id,
+          ...d.data(),
+        }));
+      }
+
+      // Also grab the counters subcollection under school/root
+      try {
+        setProgress("Backing up counters…");
+        const countersSnap = await getDocs(
+          collection(db, "school", "root", "counters"),
+        );
+        data.collections["_school_root_counters"] = countersSnap.docs.map(
+          (d) => ({ _id: d.id, ...d.data() }),
+        );
+      } catch (err) {
+        // Counters may not exist; that's fine
+      }
+
+      setProgress("Preparing file…");
+      const jsonStr = JSON.stringify(data, jsonReplacer, 2);
+      const blob = new Blob([jsonStr], { type: "application/json" });
+      const sizeKB = Math.max(1, Math.round(blob.size / 1024));
+
+      // Trigger download
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      const dateStr = new Date().toISOString().split("T")[0];
+      const slug = (school?.shortName || school?.name || "school")
+        .replace(/[^a-z0-9]/gi, "-")
+        .toLowerCase();
+      link.download = `${slug}-backup-${dateStr}.json`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+
+      // Remember locally
+      const now = new Date();
+      try {
+        localStorage.setItem("bramtech-last-backup", now.toISOString());
+      } catch {}
+      setLastLocal(now);
+
+      // Also mark on the school doc so it's visible across devices
+      try {
+        await updateDoc(doc(db, "school", "root"), {
+          lastBackupAt: serverTimestamp(),
+        });
+      } catch {}
+
+      // Count records
+      const total = Object.values(data.collections).reduce(
+        (sum, arr) => sum + arr.length,
+        0,
+      );
+
+      setMsg(
+        `✓ Backup downloaded — ${total} records, ${sizeKB} KB. Save this file to Google Drive or a safe folder.`,
+      );
+      setProgress("");
+    } catch (err) {
+      setMsg("Backup failed: " + err.message);
+      setProgress("");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!isAdminOrDirector) {
+    return (
+      <Card className="p-6 bg-amber-50 border-amber-200">
+        <p className="text-sm text-amber-900">
+          Only directors and admins can download backups.
+        </p>
+      </Card>
+    );
+  }
+
+  const lastBackupServer = school?.lastBackupAt?.toDate?.();
+  const daysSince = lastBackupServer
+    ? Math.floor(
+        (Date.now() - lastBackupServer.getTime()) / (1000 * 60 * 60 * 24),
+      )
+    : null;
+
+  return (
+    <div className="space-y-4">
+      <Card className="p-6">
+        <div className="flex items-start gap-4 mb-6">
+          <div className="w-11 h-11 rounded-lg bg-brand-100 text-brand-700 flex items-center justify-center flex-shrink-0">
+            <Database className="w-5 h-5" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <h3 className="font-semibold text-ink">Download your data</h3>
+            <p className="text-sm text-ink-soft mt-1">
+              Download a full backup of your school's data — students, scores,
+              report cards, classes, subjects, everything. Save it somewhere
+              safe (Google Drive, laptop, external drive).
+            </p>
+          </div>
+        </div>
+
+        {/* Last backup info */}
+        {(lastBackupServer || lastLocal) && (
+          <div className="mb-4 flex items-center gap-2 text-sm text-ink-soft bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
+            <Calendar className="w-4 h-4 flex-shrink-0" />
+            <span>
+              Last backup:{" "}
+              <strong>
+                {(lastBackupServer || lastLocal).toLocaleDateString("en-GB", {
+                  day: "numeric",
+                  month: "short",
+                  year: "numeric",
+                })}
+              </strong>
+              {daysSince != null && daysSince > 14 && (
+                <span className="ml-2 text-amber-700 font-medium">
+                  ({daysSince} days ago — time for a fresh one)
+                </span>
+              )}
+            </span>
+          </div>
+        )}
+
+        {/* The button */}
+        <Button onClick={runBackup} disabled={busy}>
+          {busy ? (
+            <>
+              <Loader2 className="w-4 h-4 animate-spin" />{" "}
+              {progress || "Working…"}
+            </>
+          ) : (
+            <>
+              <Download className="w-4 h-4" /> Download backup
+            </>
+          )}
+        </Button>
+
+        {msg && (
+          <div
+            className={`mt-4 text-sm px-3 py-2 rounded-lg ${
+              msg.includes("failed")
+                ? "text-red-700 bg-red-50 border border-red-200"
+                : "text-emerald-700 bg-emerald-50 border border-emerald-200"
+            }`}
+          >
+            {msg}
+          </div>
+        )}
+      </Card>
+
+      {/* Guidance */}
+      <Card className="p-6 bg-slate-50">
+        <h4 className="font-medium text-ink mb-3 flex items-center gap-2">
+          <Shield className="w-4 h-4 text-slate-500" />
+          Backup tips
+        </h4>
+        <ul className="space-y-2 text-sm text-ink-soft">
+          <li className="flex gap-2">
+            <span className="text-brand-600 font-semibold">•</span>
+            <span>
+              Download a backup once a week during the term, especially before
+              publishing report cards.
+            </span>
+          </li>
+          <li className="flex gap-2">
+            <span className="text-brand-600 font-semibold">•</span>
+            <span>
+              Save each backup to <strong>Google Drive</strong> or{" "}
+              <strong>OneDrive</strong> so you always have a copy safe from
+              laptop damage.
+            </span>
+          </li>
+          <li className="flex gap-2">
+            <span className="text-brand-600 font-semibold">•</span>
+            <span>
+              Keep at least the last 3 backups — don't overwrite. The file names
+              include the date so old ones don't get replaced.
+            </span>
+          </li>
+          <li className="flex gap-2">
+            <span className="text-brand-600 font-semibold">•</span>
+            <span>
+              The backup file is a private copy of your school's data. Anyone
+              with the file can read it — keep it in a folder only you can
+              access.
+            </span>
+          </li>
+          <li className="flex gap-2">
+            <span className="text-brand-600 font-semibold">•</span>
+            <span>
+              To restore from a backup, contact Bram Technologies. Restores are
+              done manually to avoid overwriting current data by mistake.
+            </span>
+          </li>
+        </ul>
+      </Card>
+    </div>
   );
 }
 
