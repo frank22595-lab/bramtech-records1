@@ -259,7 +259,7 @@ export default function PrivacyPolicyPage() {
           </div>
 
           <div className="mt-12 pt-6 border-t border-slate-200 text-center text-sm text-ink-soft">
-            <Link to="/terms" className="hover:text-brand-700">
+            <Link to="/terms-of-service" className="hover:text-brand-700">
               Terms of Service
             </Link>
             {" · "}

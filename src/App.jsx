@@ -72,7 +72,7 @@ function SchoolApp() {
       {/* Public parent result checker */}
       <Route path="/check-result" element={<CheckResultPage />} />
 
-      <Route path="/terms" element={<TermsOfServicePage />} />
+      <Route path="/terms-of-service" element={<TermsOfServicePage />} />
       <Route path="/privacy" element={<PrivacyPolicyPage />} />
 
       {/* Staff signup */}
