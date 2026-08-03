@@ -1,22 +1,13 @@
 /**
- * POST /api/staff-signup — v4
+ * POST /api/staff-signup — v5 multi-tenant
  *
- * Removed firebase-admin/auth import (was triggering ERR_REQUIRE_ESM on
- * Vercel's Node runtime). Now uses ONLY firebase-admin/firestore, which
- * is stable everywhere.
- *
- * Tradeoff: if code validation fails, the Firebase Auth user stays around.
- * Client can offer them a retry with a different code — auth user will be
- * reused. Small imperfection, worth it to get signups working.
+ * Resolves the school from the request and writes the user doc into THAT
+ * school's Firestore project.
  */
 
-import { getFirestore, FieldValue } from "firebase-admin/firestore";
+import { FieldValue } from "firebase-admin/firestore";
 import crypto from "crypto";
-import { ensureFirebaseAdmin } from "./_firebase-admin.js";
-
-ensureFirebaseAdmin();
-
-const db = getFirestore();
+import { getDbForSchool, resolveSchoolSlug } from "./_firebase-admin.js";
 
 const attempts = new Map();
 function checkRateLimit(ip) {
@@ -67,7 +58,12 @@ export default async function handler(req, res) {
   if (!email?.trim())
     return res.status(400).json({ error: "Email is required." });
 
+  // Which school does this signup belong to?
+  const schoolSlug = resolveSchoolSlug(req);
+
   try {
+    const db = getDbForSchool(schoolSlug);
+
     const schoolSnap = await db.doc("school/root").get();
     if (!schoolSnap.exists) {
       return res

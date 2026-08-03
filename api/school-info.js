@@ -1,20 +1,22 @@
 /**
- * GET /api/school-info — v3
+ * GET /api/school-info — v4 multi-tenant
+ *
+ * Resolves the school from ?school=slug (or Referer) and returns school
+ * branding, classes, and subjects from THAT school's Firestore project.
  */
 
-import { getFirestore } from "firebase-admin/firestore";
-import { ensureFirebaseAdmin } from "./_firebase-admin.js";
-
-ensureFirebaseAdmin();
-
-const db = getFirestore();
+import { getDbForSchool, resolveSchoolSlug } from "./_firebase-admin.js";
 
 export default async function handler(req, res) {
   if (req.method !== "GET") {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
+  const schoolSlug = resolveSchoolSlug(req);
+
   try {
+    const db = getDbForSchool(schoolSlug);
+
     const [schoolSnap, classesSnap, subjectsSnap] = await Promise.all([
       db.doc("school/root").get(),
       db.collection("classes").orderBy("order").get(),

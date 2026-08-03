@@ -1,14 +1,12 @@
 /**
- * POST /api/check-result — v4 with shared admin helper
+ * POST /api/check-result — v5 multi-tenant
+ *
+ * Resolves the school from the request (body.school → query.school → Referer)
+ * and reads results from THAT school's Firestore project.
  */
 
-import { getFirestore } from "firebase-admin/firestore";
 import crypto from "crypto";
-import { ensureFirebaseAdmin } from "./_firebase-admin.js";
-
-ensureFirebaseAdmin();
-
-const db = getFirestore();
+import { getDbForSchool, resolveSchoolSlug } from "./_firebase-admin.js";
 
 const attempts = new Map();
 
@@ -56,10 +54,15 @@ export default async function handler(req, res) {
       .json({ error: "Admission number and access code are required." });
   }
 
+  // Figure out which school this request is for
+  const schoolSlug = resolveSchoolSlug(req);
+
   const normalizedAdm = String(admissionNumber).trim().toUpperCase();
   const hashedCode = hashCode(accessCode);
 
   try {
+    const db = getDbForSchool(schoolSlug);
+
     const studentsSnap = await db
       .collection("students")
       .where("admissionNumber", "==", normalizedAdm)
