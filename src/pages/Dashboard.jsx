@@ -245,7 +245,7 @@ export default function Dashboard() {
           title="No current academic term set"
           description="Set the active term so teachers can enter scores."
           actionLabel="Set current term"
-          actionTo="/settings"
+          actionTo="/terms"
         />
       )}
       {showPromotionCTA && (
