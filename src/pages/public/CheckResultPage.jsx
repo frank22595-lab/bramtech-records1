@@ -392,7 +392,7 @@ export default function CheckResultPage() {
               <Shield className="w-3 h-3" /> Saved on this device only
             </div>
             <div>
-              <a href="/terms" className="hover:underline">
+              <a href="/terms-of-service" className="hover:underline">
                 Terms of Service
               </a>
               {" · "}
@@ -516,7 +516,7 @@ export default function CheckResultPage() {
         </p>
 
         <div className="mt-4 text-xs text-center text-ink-soft">
-          <a href="/terms" className="hover:underline">
+          <a href="/terms-of-service" className="hover:underline">
             Terms of Service
           </a>
           {" · "}
