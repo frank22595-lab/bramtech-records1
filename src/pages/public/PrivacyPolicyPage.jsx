@@ -253,7 +253,7 @@ export default function PrivacyPolicyPage() {
             <p className="mb-1">
               <strong>Bram Technologies</strong>
             </p>
-            <p className="mb-1">Email: brightamasunya2259@gmail.com</p>
+            <p className="mb-1">Email: bright2259@gmail.com</p>
             <p className="mb-1">Phone: 08137925907</p>
             <p>Location: Delta State, Nigeria</p>
           </div>
