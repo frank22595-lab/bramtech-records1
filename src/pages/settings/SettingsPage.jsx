@@ -3,6 +3,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import {
   doc,
   updateDoc,
+  deleteDoc,
   serverTimestamp,
   collection,
   onSnapshot,
@@ -16,6 +17,7 @@ import {
   Save,
   Plus,
   Trash2,
+  Pencil,
   Building2,
   GraduationCap,
   ListChecks,
@@ -344,6 +346,8 @@ function AssessmentsTab() {
     category: "ca",
   });
   const [dragging, setDragging] = useState(null);
+  const [editingId, setEditingId] = useState(null);
+  const [editForm, setEditForm] = useState({});
 
   useEffect(() => {
     return onSnapshot(
@@ -370,11 +374,53 @@ function AssessmentsTab() {
     });
     setForm({ name: "", code: "", maxScore: 10, category: "ca" });
   };
+
   const toggle = async (a) =>
     await updateDoc(doc(db, "assessments", a.id), {
       active: !a.active,
       updatedAt: serverTimestamp(),
     });
+
+  const startEdit = (a) => {
+    setEditingId(a.id);
+    setEditForm({
+      name: a.name,
+      code: a.code,
+      maxScore: a.maxScore,
+      category: a.category,
+    });
+  };
+
+  const cancelEdit = () => {
+    setEditingId(null);
+    setEditForm({});
+  };
+
+  const saveEdit = async (id) => {
+    if (!editForm.name?.trim() || !editForm.code?.trim()) {
+      alert("Name and Code are required");
+      return;
+    }
+    await updateDoc(doc(db, "assessments", id), {
+      name: editForm.name.trim(),
+      code: editForm.code.trim().toUpperCase(),
+      maxScore: Number(editForm.maxScore) || 10,
+      category: editForm.category,
+      updatedAt: serverTimestamp(),
+    });
+    cancelEdit();
+  };
+
+  const remove = async (a) => {
+    if (
+      !confirm(
+        `Delete assessment "${a.name}"?\n\nThis will remove it permanently. Any existing scores using this assessment will still be there, but you won't be able to add new ones.`,
+      )
+    ) {
+      return;
+    }
+    await deleteDoc(doc(db, "assessments", a.id));
+  };
 
   const reorder = async (fromIdx, toIdx) => {
     if (fromIdx === toIdx) return;
@@ -432,42 +478,130 @@ function AssessmentsTab() {
         </Button>
       </div>
       <ul>
-        {items.map((a, i) => (
-          <li
-            key={a.id}
-            draggable
-            onDragStart={() => setDragging(i)}
-            onDragOver={(e) => e.preventDefault()}
-            onDrop={() => {
-              if (dragging !== null) reorder(dragging, i);
-              setDragging(null);
-            }}
-            onDragEnd={() => setDragging(null)}
-            className={`py-2.5 flex items-center gap-3 border-b border-slate-100 ${dragging === i ? "opacity-50 bg-slate-50" : ""}`}
-          >
-            <GripVertical className="w-4 h-4 text-slate-300 cursor-grab flex-shrink-0" />
-            <span className="text-xs text-ink-soft w-6 text-center">
-              {i + 1}
-            </span>
-            <div className="flex-1 min-w-0">
-              <div className="font-medium">
-                {a.name}{" "}
-                <span className="text-xs bg-slate-100 rounded px-1.5 py-0.5 ml-1">
-                  {a.code}
-                </span>
-              </div>
-              <div className="text-xs text-ink-soft">
-                Max {a.maxScore} · {a.category === "exam" ? "Exam" : "CA"}
-              </div>
-            </div>
-            <button
-              onClick={() => toggle(a)}
-              className={`text-xs px-2 py-1 rounded flex-shrink-0 ${a.active ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-ink-soft"}`}
+        {items.map((a, i) => {
+          const isEditing = editingId === a.id;
+          return (
+            <li
+              key={a.id}
+              draggable={!isEditing}
+              onDragStart={() => !isEditing && setDragging(i)}
+              onDragOver={(e) => e.preventDefault()}
+              onDrop={() => {
+                if (dragging !== null) reorder(dragging, i);
+                setDragging(null);
+              }}
+              onDragEnd={() => setDragging(null)}
+              className={`py-2.5 flex items-center gap-3 border-b border-slate-100 ${
+                dragging === i ? "opacity-50 bg-slate-50" : ""
+              } ${isEditing ? "bg-brand-50/50 -mx-3 px-3 rounded" : ""}`}
             >
-              {a.active ? "Active" : "Inactive"}
-            </button>
-          </li>
-        ))}
+              <GripVertical
+                className={`w-4 h-4 flex-shrink-0 ${
+                  isEditing
+                    ? "text-slate-200 cursor-not-allowed"
+                    : "text-slate-300 cursor-grab"
+                }`}
+              />
+              <span className="text-xs text-ink-soft w-6 text-center">
+                {i + 1}
+              </span>
+              {isEditing ? (
+                <div className="flex-1 grid grid-cols-1 md:grid-cols-[2fr_1fr_1fr_1fr] gap-2">
+                  <input
+                    value={editForm.name}
+                    onChange={(e) =>
+                      setEditForm((f) => ({ ...f, name: e.target.value }))
+                    }
+                    className="px-2 py-1.5 border border-slate-300 rounded text-sm"
+                    placeholder="Name"
+                  />
+                  <input
+                    value={editForm.code}
+                    onChange={(e) =>
+                      setEditForm((f) => ({ ...f, code: e.target.value }))
+                    }
+                    className="px-2 py-1.5 border border-slate-300 rounded text-sm"
+                    placeholder="Code"
+                  />
+                  <input
+                    type="number"
+                    value={editForm.maxScore}
+                    onChange={(e) =>
+                      setEditForm((f) => ({ ...f, maxScore: e.target.value }))
+                    }
+                    className="px-2 py-1.5 border border-slate-300 rounded text-sm"
+                    placeholder="Max"
+                  />
+                  <select
+                    value={editForm.category}
+                    onChange={(e) =>
+                      setEditForm((f) => ({ ...f, category: e.target.value }))
+                    }
+                    className="px-2 py-1.5 border border-slate-300 rounded text-sm"
+                  >
+                    <option value="ca">CA</option>
+                    <option value="exam">Exam</option>
+                  </select>
+                </div>
+              ) : (
+                <div className="flex-1 min-w-0">
+                  <div className="font-medium">
+                    {a.name}{" "}
+                    <span className="text-xs bg-slate-100 rounded px-1.5 py-0.5 ml-1">
+                      {a.code}
+                    </span>
+                  </div>
+                  <div className="text-xs text-ink-soft">
+                    Max {a.maxScore} · {a.category === "exam" ? "Exam" : "CA"}
+                  </div>
+                </div>
+              )}
+              {isEditing ? (
+                <div className="flex gap-1 flex-shrink-0">
+                  <button
+                    onClick={() => saveEdit(a.id)}
+                    className="text-xs px-3 py-1.5 rounded bg-brand-600 text-white hover:bg-brand-700 font-medium"
+                  >
+                    Save
+                  </button>
+                  <button
+                    onClick={cancelEdit}
+                    className="text-xs px-3 py-1.5 rounded bg-slate-100 text-ink-soft hover:bg-slate-200"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              ) : (
+                <div className="flex items-center gap-1 flex-shrink-0">
+                  <button
+                    onClick={() => toggle(a)}
+                    className={`text-xs px-2 py-1 rounded ${
+                      a.active
+                        ? "bg-emerald-50 text-emerald-700"
+                        : "bg-slate-100 text-ink-soft"
+                    }`}
+                  >
+                    {a.active ? "Active" : "Inactive"}
+                  </button>
+                  <button
+                    onClick={() => startEdit(a)}
+                    className="p-1.5 rounded hover:bg-slate-100 text-slate-600"
+                    title="Edit"
+                  >
+                    <Pencil className="w-4 h-4" />
+                  </button>
+                  <button
+                    onClick={() => remove(a)}
+                    className="p-1.5 rounded hover:bg-red-50 text-red-600"
+                    title="Delete"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+              )}
+            </li>
+          );
+        })}
       </ul>
       {items.length === 0 && (
         <p className="text-sm text-ink-soft py-4 text-center">
