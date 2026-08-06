@@ -4,16 +4,41 @@ service cloud.firestore {
 
     // ---------- helpers ----------
     function isSignedIn() { return request.auth != null; }
-    function myRole()      { return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role; }
-    function myClassIds()  { return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.assignedClasses; }
-    function myClassTeacherOf() { return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.classTeacherOf; }
-    function isDirector()  { return isSignedIn() && myRole() == 'director'; }
-    function isAdmin()     { return isSignedIn() && (myRole() == 'director' || myRole() == 'admin'); }
-    function isTeacher()   { return isSignedIn() && myRole() == 'teacher'; }
-    function isParent()    { return isSignedIn() && myRole() == 'parent'; }
+    function myDoc()      { return get(/databases/$(database)/documents/users/$(request.auth.uid)).data; }
+    function myRole()      { return myDoc().role; }
+    function myClassIds()  { return myDoc().assignedClasses; }
+    function myClassTeacherOf() { return myDoc().classTeacherOf; }
+
+    // A pending teacher has an account but no access to anything yet.
+    // Note: status is optional on older docs, so absent == active.
+    function isApproved() {
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && myDoc().get('status', 'active') != 'pending';
+    }
+
+    function isDirector()  { return isApproved() && myRole() == 'director'; }
+    function isAdmin()     { return isApproved() && (myRole() == 'director' || myRole() == 'admin'); }
+    function isTeacher()   { return isApproved() && myRole() == 'teacher'; }
+    function isParent()    { return isApproved() && myRole() == 'parent'; }
     function ownsRecord(uid) { return isSignedIn() && request.auth.uid == uid; }
     function myLinkedStudents() {
-      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.linkedStudents;
+      return myDoc().linkedStudents;
+    }
+
+    // Is this the very first user in a brand-new project? Only then may a
+    // client mint itself a director profile. Once school/root exists, roles
+    // are set by the director (or by the Admin SDK, which bypasses rules).
+    function isFreshProject() {
+      return !exists(/databases/$(database)/documents/school/root);
+    }
+
+    // Fields a user must never change on their own profile.
+    function notEscalating() {
+      return !request.resource.data.diff(resource.data).affectedKeys()
+        .hasAny(['role', 'status', 'active', 'permissions',
+                 'assignedClasses', 'assignedSubjects', 'classTeacherOf',
+                 'isClassTeacher']);
     }
 
     // ---------- school (single doc: /school/root) ----------
@@ -24,49 +49,62 @@ service cloud.firestore {
 
     // ---------- classes ----------
     match /classes/{classId} {
-      allow read: if isSignedIn();
+      allow read: if isApproved();
       allow write: if isAdmin();
     }
 
     // ---------- subjects ----------
     match /subjects/{subjectId} {
-      allow read: if isSignedIn();
+      allow read: if isApproved();
       allow write: if isAdmin();
     }
 
     // ---------- assessments ----------
     match /assessments/{assessmentId} {
-      allow read: if isSignedIn();
+      allow read: if isApproved();
       allow write: if isAdmin();
     }
 
     // ---------- terms ----------
     match /terms/{termId} {
-      allow read: if isSignedIn();
+      allow read: if isApproved();
       allow write: if isAdmin();
     }
 
     // ---------- users / profiles ----------
     match /users/{uid} {
       allow read: if isSignedIn() && (ownsRecord(uid) || isAdmin());
-      allow create: if isSignedIn() && ownsRecord(uid);
-      allow update: if isAdmin() || ownsRecord(uid);
+
+      // Self-create is ONLY the fresh-project director bootstrap. Staff
+      // accounts are created by the Admin SDK (/api/staff-signup and
+      // /api/create-teacher), which bypasses these rules entirely — so a
+      // signed-in stranger can no longer mint themselves a role.
+      allow create: if ownsRecord(uid) && isFreshProject()
+                    && request.resource.data.role == 'director';
+
+      // Admins set roles and assignments. Users may edit their own profile
+      // (name, phone, photo…) but never their own role/status/permissions.
+      allow update: if isAdmin() || (ownsRecord(uid) && notEscalating());
+
       allow delete: if isDirector();
     }
 
     // ---------- students ----------
+    // NOTE: create/update is admin-only, unchanged from before. The app UI
+    // and README describe class teachers managing students in their own
+    // class — that is a separate, pre-existing gap, not touched here.
     match /students/{studentId} {
-      allow read: if isSignedIn();
+      allow read: if isApproved();
       allow create, update: if isAdmin();
-      allow delete: if isDirector();  // fix: was missing
+      allow delete: if isDirector();
     }
 
     // ---------- results (score entries) ----------
     match /results/{resultId} {
-      allow read: if isSignedIn();
+      allow read: if isApproved();
       allow create, update: if isAdmin() ||
         (isTeacher() && request.resource.data.classId in myClassIds());
-      allow delete: if isDirector();  // fix: was missing
+      allow delete: if isDirector();
     }
 
     // ---------- reportCards (published snapshots) ----------

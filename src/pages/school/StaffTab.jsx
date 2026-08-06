@@ -1,5 +1,5 @@
 import { useEffect, useState, useMemo } from "react";
-import { collection, onSnapshot, doc, deleteDoc } from "firebase/firestore";
+import { collection, onSnapshot } from "firebase/firestore";
 import {
   Users,
   Clock,
@@ -13,6 +13,7 @@ import {
 import { useSchool } from "../../contexts/SchoolContext";
 import { useAuth } from "../../contexts/AuthContext";
 import { getFirebase } from "../../config/firebase";
+import { apiFetch } from "../../lib/apiClient";
 import { Spinner, Card } from "../../components/ui";
 import StaffCodeSection from "../../components/staff/StaffCodeSection";
 import StaffApprovalModal from "../../components/staff/StaffApprovalModal";
@@ -51,18 +52,6 @@ export default function StaffTab() {
           return tb - ta;
         });
 
-        console.log(
-          "[StaffTab] Loaded",
-          docs.length,
-          "user(s):",
-          docs.map((u) => ({
-            id: u.id,
-            name: u.fullName,
-            role: u.role,
-            status: u.status,
-          })),
-        );
-
         setUsers(docs);
         setLoading(false);
         setError("");
@@ -93,9 +82,14 @@ export default function StaffTab() {
     )
       return;
     try {
-      await deleteDoc(doc(db, "users", user.id));
-      // The Firebase Auth user still exists — teacher will just be blocked
-      // at the /staff-pending screen forever with no profile doc.
+      // Server-side so the Firebase Auth login is deleted too — deleting only
+      // the profile left a live login behind and blocked them from ever
+      // re-signing-up with the same email.
+      await apiFetch("/api/reject-staff", {
+        method: "POST",
+        auth: true,
+        body: { uid: user.id },
+      });
     } catch (err) {
       alert("Could not reject: " + err.message);
     }

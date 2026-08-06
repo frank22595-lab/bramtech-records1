@@ -75,13 +75,11 @@ function SchoolApp() {
       <Route path="/terms-of-service" element={<TermsOfServicePage />} />
       <Route path="/privacy" element={<PrivacyPolicyPage />} />
 
-      {/* Staff signup */}
-      <Route
-        path="/staff-join"
-        element={
-          user ? <Navigate to="/dashboard" replace /> : <StaffJoinPage />
-        }
-      />
+      {/* Staff signup.
+          Not gated on `user` — signing in is the LAST step of signup, and
+          redirecting the moment auth resolves used to unmount the page
+          mid-submit. StaffJoinPage navigates onward itself when it's done. */}
+      <Route path="/staff-join" element={<StaffJoinPage />} />
 
       {/* Login */}
       <Route

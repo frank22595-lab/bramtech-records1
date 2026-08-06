@@ -1,13 +1,12 @@
 import { useState, useEffect } from 'react'
 import {
-  collection, doc, onSnapshot, orderBy, query, where, setDoc, updateDoc,
+  collection, doc, onSnapshot, orderBy, query, where, updateDoc,
   serverTimestamp,
 } from 'firebase/firestore'
-import { initializeApp, deleteApp } from 'firebase/app'
-import { getAuth, createUserWithEmailAndPassword, updateProfile } from 'firebase/auth'
 import { Plus, X, User, Copy, Check, Users, GraduationCap } from 'lucide-react'
 import { Button, Card, Input, Spinner, Badge } from '../../components/ui'
-import { getFirebase, getFirebaseConfig } from '../../config/firebase'
+import { getFirebase } from '../../config/firebase'
+import { apiFetch } from '../../lib/apiClient'
 import { useAuth } from '../../contexts/AuthContext'
 
 export default function TeachersPage() {
@@ -136,48 +135,38 @@ function TeacherModal({ teacher, classes, onClose, onCreated }) {
           phone: form.phone.trim(),
           assignedClasses: form.assignedClasses,
           isClassTeacher: form.isClassTeacher,
-          classTeacherOf: form.classTeacherOf,
+          classTeacherOf: form.isClassTeacher ? form.classTeacherOf : null,
           active: form.active,
           updatedAt: serverTimestamp(),
         })
         onClose()
       } else {
-        // NEW TEACHER: create Firebase Auth account via secondary app so
-        // the current director stays logged in. Then create the user profile doc.
-        const tempPassword = generatePassword()
-        const config = getFirebaseConfig()
-        const secondaryApp = initializeApp(config, `secondary-${Date.now()}`)
-        try {
-          const secondaryAuth = getAuth(secondaryApp)
-          const cred = await createUserWithEmailAndPassword(secondaryAuth, form.email.trim(), tempPassword)
-          await updateProfile(cred.user, { displayName: form.fullName.trim() })
-
-          // Create user profile in Firestore (via primary db, using new uid)
-          await setDoc(doc(db, 'users', cred.user.uid), {
-            email: form.email.trim(),
+        // NEW TEACHER: the API creates the Auth account and the Firestore
+        // profile together, in THIS school's Firebase project, using the
+        // Admin SDK. Doing it from the browser failed — a director cannot
+        // write users/{someoneElsesUid} under our security rules, so the
+        // account was created but left without a profile.
+        const info = await apiFetch('/api/create-teacher', {
+          method: 'POST',
+          auth: true,
+          body: {
             fullName: form.fullName.trim(),
+            email: form.email.trim(),
             phone: form.phone.trim(),
-            role: 'teacher',
-            active: true,
             assignedClasses: form.assignedClasses,
-            isClassTeacher: form.isClassTeacher,
-            classTeacherOf: form.classTeacherOf,
-            createdAt: serverTimestamp(),
-            updatedAt: serverTimestamp(),
-          })
+            classTeacherOf: form.isClassTeacher ? form.classTeacherOf : null,
+          },
+        })
 
-          onCreated({
-            fullName: form.fullName.trim(),
-            email: form.email.trim(),
-            tempPassword,
-          })
-        } finally {
-          await deleteApp(secondaryApp)
-        }
+        onCreated({
+          fullName: info.fullName,
+          email: info.email,
+          tempPassword: info.tempPassword,
+        })
       }
     } catch (err) {
       console.error('Save teacher error:', err)
-      setError(err.message.replace('Firebase: ', ''))
+      setError(String(err.message || 'Could not save.').replace('Firebase: ', ''))
       setBusy(false)
     }
   }
@@ -302,9 +291,3 @@ function CredentialsModal({ info, onClose }) {
   )
 }
 
-function generatePassword() {
-  const words = ['Sun', 'Moon', 'Star', 'Rain', 'Bird', 'Fish', 'Tree', 'Book', 'Ocean', 'Cloud']
-  const word = words[Math.floor(Math.random() * words.length)]
-  const num = Math.floor(1000 + Math.random() * 9000)
-  return `${word}${num}!`
-}

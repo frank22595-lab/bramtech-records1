@@ -1,105 +1,113 @@
 /**
- * POST /api/staff-signup — v5 multi-tenant
+ * POST /api/staff-signup — v6 multi-tenant
  *
- * Resolves the school from the request and writes the user doc into THAT
- * school's Firestore project.
+ * Creates a pending teacher account in THIS school's Firebase project.
+ *
+ * v6 change: the Auth account is now created HERE, with the Admin SDK, after
+ * the join code has been validated. Previously the browser called
+ * createUserWithEmailAndPassword() first and only then hit this route, which
+ * meant (a) an invalid code still left a real Auth account behind, and
+ * (b) signing in mid-submit unmounted the signup page before it could finish.
+ *
+ * Order of operations — code first, account second, and roll the account back
+ * if the profile write fails, so Auth and Firestore never drift apart:
+ *   1. validate the join code against school/root.staffJoinCodeHash
+ *   2. createUser() in this school's Auth
+ *   3. write users/{uid} with status: "pending"
+ *
+ * Body: { code, fullName, email, password, phone?, subjects?, classId?, note?, school? }
  */
 
 import { FieldValue } from "firebase-admin/firestore";
-import crypto from "crypto";
-import { getDbForSchool, resolveSchoolSlug } from "./_firebase-admin.js";
+import {
+  getAuthForSchool,
+  getDbForSchool,
+  resolveSchoolSlug,
+} from "./_firebase-admin.js";
+import {
+  validateStaffCode,
+  makeRateLimiter,
+  clientIp,
+} from "./_staff-code.js";
 
-const attempts = new Map();
-function checkRateLimit(ip) {
-  const now = Date.now();
-  const hour = 60 * 60 * 1000;
-  const entries = (attempts.get(ip) || []).filter((t) => now - t < hour);
-  if (entries.length >= 10) return false;
-  entries.push(now);
-  attempts.set(ip, entries);
-  return true;
-}
-
-function hashCode(code) {
-  const normalized = String(code || "")
-    .toUpperCase()
-    .replace(/[-\s]/g, "")
-    .replace(/^STAFF/, "");
-  return crypto.createHash("sha256").update(normalized).digest("hex");
-}
+const checkRateLimit = makeRateLimiter({ max: 10, windowMs: 60 * 60 * 1000 });
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  const ip = (
-    req.headers["x-forwarded-for"] ||
-    req.socket?.remoteAddress ||
-    "unknown"
-  )
-    .split(",")[0]
-    .trim();
-
-  if (!checkRateLimit(ip)) {
+  if (!checkRateLimit(clientIp(req))) {
     return res
       .status(429)
       .json({ error: "Too many signups from this address. Try later." });
   }
 
-  const { code, uid, fullName, email, phone, subjects, classId, note } =
+  const { code, fullName, email, password, phone, subjects, classId, note } =
     req.body || {};
 
   if (!code)
     return res.status(400).json({ error: "Staff join code is required." });
-  if (!uid) return res.status(400).json({ error: "Auth account missing." });
   if (!fullName?.trim())
     return res.status(400).json({ error: "Full name is required." });
   if (!email?.trim())
     return res.status(400).json({ error: "Email is required." });
+  if (!password || String(password).length < 6)
+    return res
+      .status(400)
+      .json({ error: "Password must be at least 6 characters." });
+
+  const cleanEmail = email.trim().toLowerCase();
+  const cleanName = fullName.trim();
 
   // Which school does this signup belong to?
   const schoolSlug = resolveSchoolSlug(req);
 
+  let createdUid = null;
+
   try {
     const db = getDbForSchool(schoolSlug);
+    const auth = getAuthForSchool(schoolSlug);
 
-    const schoolSnap = await db.doc("school/root").get();
-    if (!schoolSnap.exists) {
-      return res
-        .status(404)
-        .json({ error: "School not set up yet. Contact the director." });
+    // 1. The code gate. Nothing is created before this passes.
+    const codeCheck = await validateStaffCode(db, code);
+    if (!codeCheck.ok) {
+      return res.status(codeCheck.status).json({ error: codeCheck.error });
     }
 
-    const school = schoolSnap.data();
-    const storedHash = school.staffJoinCodeHash;
-
-    if (!storedHash) {
-      return res.status(403).json({
-        error:
-          "Staff signups are not enabled. Ask the director to generate a join code.",
+    // 2. Create the Auth account in THIS school's project.
+    let userRecord;
+    try {
+      userRecord = await auth.createUser({
+        email: cleanEmail,
+        password: String(password),
+        displayName: cleanName,
       });
-    }
-
-    const providedHash = hashCode(code);
-    if (providedHash !== storedHash) {
-      return res
-        .status(401)
-        .json({
-          error: "Invalid staff join code. Please check with your director.",
+    } catch (err) {
+      if (err.code === "auth/email-already-exists") {
+        return res.status(409).json({
+          error:
+            "This email already has an account at this school. Try logging in instead.",
         });
+      }
+      if (err.code === "auth/invalid-email") {
+        return res
+          .status(400)
+          .json({ error: "That does not look like a valid email address." });
+      }
+      if (err.code === "auth/invalid-password") {
+        return res
+          .status(400)
+          .json({ error: "Password must be at least 6 characters." });
+      }
+      throw err;
     }
+    createdUid = userRecord.uid;
 
-    const existingSnap = await db.doc(`users/${uid}`).get();
-    if (existingSnap.exists) {
-      return res
-        .status(409)
-        .json({ error: "Account already exists for this user." });
-    }
-
-    await db.doc(`users/${uid}`).set({
-      fullName: fullName.trim(),
-      email: email.trim().toLowerCase(),
+    // 3. Write the pending profile. The director approves from School → Staff.
+    await db.doc(`users/${createdUid}`).set({
+      fullName: cleanName,
+      email: cleanEmail,
       phone: (phone || "").trim(),
       role: "teacher",
       status: "pending",
@@ -115,9 +123,24 @@ export default async function handler(req, res) {
       updatedAt: FieldValue.serverTimestamp(),
     });
 
-    return res.status(200).json({ success: true, uid });
+    return res.status(200).json({ success: true, uid: createdUid });
   } catch (err) {
     console.error("staff-signup error:", err);
+
+    // Roll back the orphaned Auth account so the teacher can retry with the
+    // same email instead of hitting "email already in use" forever.
+    if (createdUid) {
+      try {
+        await getAuthForSchool(schoolSlug).deleteUser(createdUid);
+      } catch (cleanupErr) {
+        console.error(
+          "staff-signup: failed to roll back auth user",
+          createdUid,
+          cleanupErr.message,
+        );
+      }
+    }
+
     return res.status(500).json({
       error: "Something went wrong. Please try again.",
     });

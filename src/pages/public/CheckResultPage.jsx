@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { generateReportCardPDF } from "../../lib/pdfGenerator";
 import { formatAccessCode } from "../../lib/accessCode";
+import { apiFetch } from "../../lib/apiClient";
 import { useSchool } from "../../contexts/SchoolContext";
 import {
   Plus,
@@ -84,16 +85,13 @@ export default function CheckResultPage() {
     setError("");
     setResult(null);
     try {
-      const res = await fetch("/api/check-result", {
+      const data = await apiFetch("/api/check-result", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+        body: {
           admissionNumber: adm.trim(),
           accessCode: cd.trim(),
-        }),
+        },
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Something went wrong.");
       setResult(data);
 
       if (remember && isNewlyTyped) {

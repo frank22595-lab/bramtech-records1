@@ -1,8 +1,9 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { createUserWithEmailAndPassword, updateProfile } from "firebase/auth";
+import { signInWithEmailAndPassword } from "firebase/auth";
 import { getFirebase } from "../../config/firebase";
 import { formatStaffCode } from "../../lib/staffCode";
+import { apiFetch } from "../../lib/apiClient";
 import {
   Loader2,
   Check,
@@ -19,6 +20,7 @@ export default function StaffJoinPage() {
   const { auth } = getFirebase();
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(false);
+  const [verifying, setVerifying] = useState(false);
   const [error, setError] = useState("");
 
   const [code, setCode] = useState("");
@@ -35,20 +37,37 @@ export default function StaffJoinPage() {
   const [schoolInfo, setSchoolInfo] = useState(null);
 
   useEffect(() => {
-    fetch("/api/school-info")
-      .then((r) => r.json())
+    apiFetch("/api/school-info")
       .then((data) => setSchoolInfo(data))
       .catch((err) => console.error("Failed to load school info:", err));
   }, []);
 
-  const proceedToStep2 = (e) => {
+  // Step 1 → 2 is gated on the server actually recognising the code for THIS
+  // school. The same code is revalidated in /api/staff-signup, so a user who
+  // skips this check still cannot create an account.
+  const proceedToStep2 = async (e) => {
     e.preventDefault();
     setError("");
+
     if (!code.trim()) {
       setError("Please enter the staff join code.");
       return;
     }
-    setStep(2);
+
+    setVerifying(true);
+    try {
+      await apiFetch("/api/verify-staff-code", {
+        method: "POST",
+        body: { code: code.trim() },
+      });
+      setStep(2);
+    } catch (err) {
+      setError(
+        err.message || "That code is not valid. Please check with your director.",
+      );
+    } finally {
+      setVerifying(false);
+    }
   };
 
   const submit = async (e) => {
@@ -61,65 +80,54 @@ export default function StaffJoinPage() {
       return setError("Password must be at least 6 characters.");
     if (password !== confirmPassword)
       return setError("Passwords do not match.");
-    if (!classId)
+    // Only require a class when the school actually has classes to pick from.
+    if (schoolInfo?.classes?.length > 0 && !classId)
       return setError(
         "Please select which class you teach or want to be class teacher of.",
       );
 
     setLoading(true);
 
-    let createdUid = null;
     try {
-      const userCred = await createUserWithEmailAndPassword(
-        auth,
-        email.trim(),
-        password,
-      );
-      createdUid = userCred.user.uid;
-
-      try {
-        await updateProfile(userCred.user, { displayName: fullName.trim() });
-      } catch {
-        /* non-critical */
-      }
-
-      const res = await fetch("/api/staff-signup", {
+      // The server validates the code, creates the Auth account and writes the
+      // pending profile. Creating the account in the browser first (the old
+      // flow) signed the user in mid-submit, which unmounted this page before
+      // the profile was written.
+      await apiFetch("/api/staff-signup", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+        body: {
           code: code.trim(),
-          uid: createdUid,
           fullName: fullName.trim(),
           email: email.trim(),
+          password,
           phone: phone.trim(),
           subjects: selectedSubjects,
           classId,
           note: note.trim(),
-        }),
+        },
       });
 
-      const data = await res.json();
-
-      if (!res.ok) {
-        throw new Error(data.error || "Signup failed.");
+      // Account exists and is pending — sign in so /staff-pending can show
+      // their status live and flip them to the dashboard on approval.
+      try {
+        await signInWithEmailAndPassword(auth, email.trim(), password);
+      } catch (signInErr) {
+        console.warn("Post-signup sign-in failed:", signInErr.message);
+        navigate(`/login${window.location.search}`, { replace: true });
+        return;
       }
 
       navigate(`/staff-pending${window.location.search}`, { replace: true });
     } catch (err) {
       console.error("Signup error:", err);
-
-      let msg = err.message || "Signup failed. Please try again.";
-      if (err.code === "auth/email-already-in-use") {
-        msg = "This email already has an account. Try logging in instead.";
-      } else if (err.code === "auth/invalid-email") {
-        msg = "That does not look like a valid email address.";
-      } else if (err.code === "auth/weak-password") {
-        msg =
-          "Password is too weak. Try at least 6 characters with a mix of letters and numbers.";
-      }
-
-      setError(msg);
+      setError(err.message || "Signup failed. Please try again.");
       setLoading(false);
+
+      // A rejected code means the one they typed stopped working (e.g. the
+      // director regenerated it). Send them back to step 1 to re-enter it.
+      if (err.status === 401 || err.status === 403) {
+        setStep(1);
+      }
     }
   };
 
@@ -209,9 +217,18 @@ export default function StaffJoinPage() {
 
                 <button
                   type="submit"
-                  className="w-full bg-slate-900 hover:bg-slate-800 text-white font-medium py-2.5 rounded-lg flex items-center justify-center gap-2 transition-colors"
+                  disabled={verifying}
+                  className="w-full bg-slate-900 hover:bg-slate-800 text-white font-medium py-2.5 rounded-lg flex items-center justify-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  Continue <ChevronRight className="w-4 h-4" />
+                  {verifying ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" /> Checking code…
+                    </>
+                  ) : (
+                    <>
+                      Continue <ChevronRight className="w-4 h-4" />
+                    </>
+                  )}
                 </button>
               </form>
 

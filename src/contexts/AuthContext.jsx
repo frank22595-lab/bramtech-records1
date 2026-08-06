@@ -129,14 +129,21 @@ export function AuthProvider({ children }) {
             }
 
             // Doc doesn't exist yet. Two cases:
-            //   1. First director on a new school → auto-bootstrap
-            //   2. Fresh signup where API is still writing (or completing)
+            //   1. Brand-new Firebase project, no school doc at all → the
+            //      first person to sign in bootstraps themselves as director
+            //   2. Fresh staff signup where the API is still writing
             try {
               const schoolSnap = await getDoc(doc(db, "school", "root"));
-              const schoolReady =
-                schoolSnap.exists() && schoolSnap.data().setupComplete === true;
 
-              if (!schoolReady) {
+              // The bootstrap window is ONLY while school/root is absent.
+              // It used to be "school not setupComplete", which left a live
+              // school wide open: anyone who created an auth account got a
+              // director profile written for them. Once the director creates
+              // the school doc in step 1 of the wizard, this path is closed
+              // and Firestore rules reject it too.
+              const isFreshProject = !schoolSnap.exists();
+
+              if (isFreshProject) {
                 await setDoc(doc(db, "users", fbUser.uid), {
                   email: fbUser.email,
                   fullName: fbUser.displayName || fbUser.email.split("@")[0],
