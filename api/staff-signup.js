@@ -1,21 +1,8 @@
 /**
- * POST /api/staff-signup — v6 multi-tenant
+ * POST /api/staff-signup
  *
- * Creates a pending teacher account in THIS school's Firebase project.
- *
- * v6 change: the Auth account is now created HERE, with the Admin SDK, after
- * the join code has been validated. Previously the browser called
- * createUserWithEmailAndPassword() first and only then hit this route, which
- * meant (a) an invalid code still left a real Auth account behind, and
- * (b) signing in mid-submit unmounted the signup page before it could finish.
- *
- * Order of operations — code first, account second, and roll the account back
- * if the profile write fails, so Auth and Firestore never drift apart:
- *   1. validate the join code against school/root.staffJoinCodeHash
- *   2. createUser() in this school's Auth
- *   3. write users/{uid} with status: "pending"
- *
- * Body: { code, fullName, email, password, phone?, subjects?, classId?, note?, school? }
+ * Creates the teacher's Auth account AND pending user doc in THIS school's
+ * Firebase project. Validates the staff join code server-side.
  */
 
 import { FieldValue } from "firebase-admin/firestore";
@@ -24,11 +11,7 @@ import {
   getDbForSchool,
   resolveSchoolSlug,
 } from "./_firebase-admin.js";
-import {
-  validateStaffCode,
-  makeRateLimiter,
-  clientIp,
-} from "./_staff-code.js";
+import { validateStaffCode, makeRateLimiter, clientIp } from "./_staff-code.js";
 
 const checkRateLimit = makeRateLimiter({ max: 10, windowMs: 60 * 60 * 1000 });
 
@@ -43,7 +26,7 @@ export default async function handler(req, res) {
       .json({ error: "Too many signups from this address. Try later." });
   }
 
-  const { code, fullName, email, password, phone, subjects, classId, note } =
+  const { code, fullName, email, password, phone, classId, subjects, note } =
     req.body || {};
 
   if (!code)
@@ -52,59 +35,53 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: "Full name is required." });
   if (!email?.trim())
     return res.status(400).json({ error: "Email is required." });
-  if (!password || String(password).length < 6)
+  if (!password || password.length < 6) {
     return res
       .status(400)
       .json({ error: "Password must be at least 6 characters." });
+  }
 
+  const schoolSlug = resolveSchoolSlug(req);
   const cleanEmail = email.trim().toLowerCase();
   const cleanName = fullName.trim();
-
-  // Which school does this signup belong to?
-  const schoolSlug = resolveSchoolSlug(req);
 
   let createdUid = null;
 
   try {
     const db = getDbForSchool(schoolSlug);
-    const auth = getAuthForSchool(schoolSlug);
 
-    // 1. The code gate. Nothing is created before this passes.
+    // 1. Validate the staff code against the school's stored hash
     const codeCheck = await validateStaffCode(db, code);
     if (!codeCheck.ok) {
       return res.status(codeCheck.status).json({ error: codeCheck.error });
     }
 
-    // 2. Create the Auth account in THIS school's project.
+    // 2. Create the Firebase Auth account
+    const auth = await getAuthForSchool(schoolSlug);
+
     let userRecord;
     try {
       userRecord = await auth.createUser({
         email: cleanEmail,
-        password: String(password),
+        password,
         displayName: cleanName,
       });
     } catch (err) {
       if (err.code === "auth/email-already-exists") {
         return res.status(409).json({
-          error:
-            "This email already has an account at this school. Try logging in instead.",
+          error: "An account with that email already exists.",
         });
       }
       if (err.code === "auth/invalid-email") {
-        return res
-          .status(400)
-          .json({ error: "That does not look like a valid email address." });
-      }
-      if (err.code === "auth/invalid-password") {
-        return res
-          .status(400)
-          .json({ error: "Password must be at least 6 characters." });
+        return res.status(400).json({
+          error: "That does not look like a valid email address.",
+        });
       }
       throw err;
     }
     createdUid = userRecord.uid;
 
-    // 3. Write the pending profile. The director approves from School → Staff.
+    // 3. Create the pending Firestore user doc
     await db.doc(`users/${createdUid}`).set({
       fullName: cleanName,
       email: cleanEmail,
@@ -123,15 +100,19 @@ export default async function handler(req, res) {
       updatedAt: FieldValue.serverTimestamp(),
     });
 
-    return res.status(200).json({ success: true, uid: createdUid });
+    return res.status(200).json({
+      success: true,
+      uid: createdUid,
+      email: cleanEmail,
+    });
   } catch (err) {
     console.error("staff-signup error:", err);
 
-    // Roll back the orphaned Auth account so the teacher can retry with the
-    // same email instead of hitting "email already in use" forever.
+    // Roll back the Auth account if the Firestore write failed
     if (createdUid) {
       try {
-        await getAuthForSchool(schoolSlug).deleteUser(createdUid);
+        const auth = await getAuthForSchool(schoolSlug);
+        await auth.deleteUser(createdUid);
       } catch (cleanupErr) {
         console.error(
           "staff-signup: failed to roll back auth user",
