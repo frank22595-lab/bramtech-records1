@@ -1,20 +1,7 @@
 /**
  * POST /api/create-teacher
  *
- * Director/admin manually adds a teacher. Creates the Auth account AND the
- * Firestore profile in THIS school's project, then returns the generated
- * temporary password once so the director can pass it on.
- *
- * Why this moved server-side: the browser used to create the account with a
- * secondary Firebase app and then write users/{newUid} as the director — which
- * Firestore rules correctly reject, because a director does not own that uid.
- * The Auth account was created but the profile write failed, leaving an
- * orphaned login. The Admin SDK does both, atomically from the caller's point
- * of view, with a rollback if the second step fails.
- *
- * Auth: Bearer <Firebase ID token> of a director/admin OF THIS SCHOOL.
- * Body: { fullName, email, phone?, assignedClasses?, assignedSubjects?,
- *         classTeacherOf?, role?, permissions?, school? }
+ * Director/admin manually adds a teacher.
  */
 
 import { FieldValue } from "firebase-admin/firestore";
@@ -71,7 +58,6 @@ export default async function handler(req, res) {
   if (!email?.trim())
     return res.status(400).json({ error: "Email is required." });
 
-  // Only ever teacher or admin from this route — never director.
   const safeRole = role === "admin" ? "admin" : "teacher";
   const cleanEmail = email.trim().toLowerCase();
   const cleanName = fullName.trim();
@@ -79,15 +65,13 @@ export default async function handler(req, res) {
   let createdUid = null;
 
   try {
-    // Caller must be a director/admin of THIS school. verifyIdToken is scoped
-    // to this school's Firebase project, so a token from another tenant fails.
     const caller = await requireAdminCaller(req, schoolSlug);
     if (!caller.ok) {
       return res.status(caller.status).json({ error: caller.error });
     }
 
     const db = getDbForSchool(schoolSlug);
-    const auth = getAuthForSchool(schoolSlug);
+    const auth = await getAuthForSchool(schoolSlug);
 
     const tempPassword = generatePassword();
 
@@ -115,7 +99,6 @@ export default async function handler(req, res) {
 
     const classes = asArray(assignedClasses);
     const classTeacher = classTeacherOf || null;
-    // Being class teacher of a class implies being assigned to it.
     if (classTeacher && !classes.includes(classTeacher)) {
       classes.push(classTeacher);
     }
@@ -125,7 +108,6 @@ export default async function handler(req, res) {
       email: cleanEmail,
       phone: (phone || "").trim(),
       role: safeRole,
-      // Director-created accounts skip the approval queue.
       status: "active",
       active: true,
       assignedClasses: classes,
@@ -150,11 +132,10 @@ export default async function handler(req, res) {
   } catch (err) {
     console.error("create-teacher error:", err);
 
-    // Never leave an Auth account without a profile — that account could log
-    // in and hit the director auto-promotion path in AuthContext.
     if (createdUid) {
       try {
-        await getAuthForSchool(schoolSlug).deleteUser(createdUid);
+        const auth = await getAuthForSchool(schoolSlug);
+        await auth.deleteUser(createdUid);
       } catch (cleanupErr) {
         console.error(
           "create-teacher: failed to roll back auth user",
@@ -166,6 +147,8 @@ export default async function handler(req, res) {
 
     return res
       .status(500)
-      .json({ error: "Could not create the teacher account. Please try again." });
+      .json({
+        error: "Could not create the teacher account. Please try again.",
+      });
   }
 }
